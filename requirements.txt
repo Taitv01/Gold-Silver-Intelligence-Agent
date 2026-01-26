@@ -1,0 +1,4 @@
+agentscope
+requests
+python-dotenv
+google-search-results
