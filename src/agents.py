@@ -4,7 +4,7 @@ Defines NewsHunter and MarketAnalyst agents using AgentScope.
 """
 import requests
 import agentscope
-from agentscope.agents import DialogAgent
+from agentscope.agent import ReActAgent
 from agentscope.message import Msg
 
 from src.config import MODEL_CONFIG, SERPER_API_KEY
@@ -126,14 +126,14 @@ def initialize_agents():
     agentscope.init(model_configs=[MODEL_CONFIG])
 
     # Create NewsHunter Agent
-    news_hunter = DialogAgent(
+    news_hunter = ReActAgent(
         name="NewsHunter",
         sys_prompt=NEWS_HUNTER_PROMPT,
         model_config_name=MODEL_CONFIG["config_name"],
     )
 
     # Create MarketAnalyst Agent
-    market_analyst = DialogAgent(
+    market_analyst = ReActAgent(
         name="MarketAnalyst",
         sys_prompt=MARKET_ANALYST_PROMPT,
         model_config_name=MODEL_CONFIG["config_name"],
