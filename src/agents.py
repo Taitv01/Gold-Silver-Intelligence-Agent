@@ -1,6 +1,7 @@
 """
 Gold-Silver-Intelligence Agents Module
 Rewritten for AgentScope 1.0+ API (async-based).
+Supports: Gemini, ZhipuAI (GLM), OpenAI as fallback.
 """
 import os
 import asyncio
@@ -8,12 +9,12 @@ import requests
 import agentscope
 from agentscope.agent import ReActAgent
 from agentscope.message import Msg
-from agentscope.model import GeminiChatModel, OpenAIChatModel
-from agentscope.formatter import GeminiChatFormatter, OpenAIChatFormatter
+from agentscope.model import GeminiChatModel, OpenAIChatModel, ZhipuAIChatModel
+from agentscope.formatter import GeminiChatFormatter, OpenAIChatFormatter, ZhipuAIChatFormatter
 from agentscope.memory import InMemoryMemory
 from agentscope.tool import Toolkit
 
-from src.config import SERPER_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY
+from src.config import SERPER_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY, GLM_API_KEY
 
 
 def search_news(query: str, num_results: int = 10) -> list:
@@ -119,23 +120,93 @@ OUTPUT FORMAT:
 
 
 def get_model_and_formatter():
-    """Get the appropriate model and formatter based on available API keys."""
+    """
+    Get the appropriate model and formatter based on available API keys.
+    Priority: Gemini -> GLM (ZhipuAI) -> OpenAI
+    """
+    # Priority 1: Gemini
     if GEMINI_API_KEY:
+        print("[INFO] Using Gemini API (gemini-2.0-flash)")
         model = GeminiChatModel(
             model_name="gemini-2.0-flash",
             api_key=GEMINI_API_KEY,
         )
         formatter = GeminiChatFormatter()
         return model, formatter
-    elif OPENAI_API_KEY:
+    
+    # Priority 2: ZhipuAI (GLM)
+    if GLM_API_KEY:
+        print("[INFO] Using ZhipuAI GLM API (glm-4-flash)")
+        model = ZhipuAIChatModel(
+            model_name="glm-4-flash",
+            api_key=GLM_API_KEY,
+        )
+        formatter = ZhipuAIChatFormatter()
+        return model, formatter
+    
+    # Priority 3: OpenAI
+    if OPENAI_API_KEY:
+        print("[INFO] Using OpenAI API (gpt-4o-mini)")
         model = OpenAIChatModel(
             model_name="gpt-4o-mini",
             api_key=OPENAI_API_KEY,
         )
         formatter = OpenAIChatFormatter()
         return model, formatter
-    else:
-        raise ValueError("No LLM API key configured. Set GEMINI_API_KEY or OPENAI_API_KEY.")
+    
+    raise ValueError("No LLM API key configured. Set GEMINI_API_KEY, GLM_API_KEY, or OPENAI_API_KEY.")
+
+
+def get_model_and_formatter_with_fallback():
+    """
+    Try to get model with automatic fallback if primary fails.
+    Tries: Gemini -> GLM -> OpenAI
+    """
+    errors = []
+    
+    # Try Gemini first
+    if GEMINI_API_KEY:
+        try:
+            print("[INFO] Trying Gemini API...")
+            model = GeminiChatModel(
+                model_name="gemini-2.0-flash",
+                api_key=GEMINI_API_KEY,
+            )
+            formatter = GeminiChatFormatter()
+            return model, formatter, "Gemini"
+        except Exception as e:
+            errors.append(f"Gemini: {e}")
+            print(f"[WARN] Gemini failed: {e}")
+    
+    # Fallback to GLM
+    if GLM_API_KEY:
+        try:
+            print("[INFO] Trying ZhipuAI GLM API...")
+            model = ZhipuAIChatModel(
+                model_name="glm-4-flash",
+                api_key=GLM_API_KEY,
+            )
+            formatter = ZhipuAIChatFormatter()
+            return model, formatter, "GLM"
+        except Exception as e:
+            errors.append(f"GLM: {e}")
+            print(f"[WARN] GLM failed: {e}")
+    
+    # Fallback to OpenAI
+    if OPENAI_API_KEY:
+        try:
+            print("[INFO] Trying OpenAI API...")
+            model = OpenAIChatModel(
+                model_name="gpt-4o-mini",
+                api_key=OPENAI_API_KEY,
+            )
+            formatter = OpenAIChatFormatter()
+            return model, formatter, "OpenAI"
+        except Exception as e:
+            errors.append(f"OpenAI: {e}")
+            print(f"[WARN] OpenAI failed: {e}")
+    
+    raise ValueError(f"All LLM APIs failed. Errors: {errors}")
 
 
 async def run_analysis_async(query: str = "gold silver price news") -> str:
@@ -159,78 +230,3 @@ async def run_analysis_async(query: str = "gold silver price news") -> str:
 
     # Format news for agent
     news_text = "\n\n".join([
-        f"📰 {item['title']}\n"
-        f"   Nguồn: {item['source']} | {item['date']}\n"
-        f"   {item['snippet']}"
-        for item in news_items[:8]  # Limit to 8 articles
-    ])
-
-    print(f"[INFO] Found {len(news_items)} news articles.")
-
-    # Step 2: Initialize AgentScope
-    print("[INFO] Initializing AgentScope...")
-    agentscope.init(project="GoldSilverIntelligence", name="analysis")
-
-    # Step 3: Get model and formatter
-    model, formatter = get_model_and_formatter()
-
-    # Step 4: Create NewsHunter Agent
-    print("[INFO] Creating NewsHunter agent...")
-    news_hunter = ReActAgent(
-        name="NewsHunter",
-        sys_prompt=NEWS_HUNTER_PROMPT,
-        model=model,
-        memory=InMemoryMemory(),
-        formatter=formatter,
-        toolkit=Toolkit(),
-    )
-
-    # Step 5: Create MarketAnalyst Agent
-    print("[INFO] Creating MarketAnalyst agent...")
-    market_analyst = ReActAgent(
-        name="MarketAnalyst",
-        sys_prompt=MARKET_ANALYST_PROMPT,
-        model=model,
-        memory=InMemoryMemory(),
-        formatter=formatter,
-        toolkit=Toolkit(),
-    )
-
-    # Step 6: NewsHunter filters important news
-    print("[INFO] NewsHunter analyzing news...")
-    hunter_input = Msg(
-        name="user",
-        content=f"Phân tích và lọc các tin tức sau:\n\n{news_text}",
-        role="user"
-    )
-    hunter_response = await news_hunter(hunter_input)
-    hunter_content = hunter_response.get_text_content() if hasattr(hunter_response, 'get_text_content') else str(hunter_response.content)
-
-    # Step 7: MarketAnalyst provides insights
-    print("[INFO] MarketAnalyst generating report...")
-    analyst_input = Msg(
-        name="NewsHunter",
-        content=f"Dựa trên các tin tức đã lọc sau đây, hãy phân tích xu hướng giá Vàng/Bạc:\n\n{hunter_content}",
-        role="user"
-    )
-    analyst_response = await market_analyst(analyst_input)
-    analyst_content = analyst_response.get_text_content() if hasattr(analyst_response, 'get_text_content') else str(analyst_response.content)
-
-    # Combine reports
-    final_report = f"{hunter_content}\n\n---\n\n{analyst_content}"
-
-    print("[INFO] Analysis pipeline completed.")
-    return final_report
-
-
-def run_analysis_pipeline(query: str = "gold silver price news") -> str:
-    """
-    Run the full analysis pipeline (sync wrapper).
-    
-    Args:
-        query: Search query for news
-
-    Returns:
-        Final analysis report as string
-    """
-    return asyncio.run(run_analysis_async(query))
