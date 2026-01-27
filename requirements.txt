@@ -3,3 +3,4 @@ agentscope>=1.0.0
 requests
 python-dotenv
 google-genai
+zhipuai
