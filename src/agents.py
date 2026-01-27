@@ -9,7 +9,7 @@ import agentscope
 from agentscope.agent import ReActAgent
 from agentscope.message import Msg
 from agentscope.model import GeminiChatModel, OpenAIChatModel
-from agentscope.formatter import BasicFormatter
+from agentscope.formatter import GeminiChatFormatter, OpenAIChatFormatter
 from agentscope.memory import InMemoryMemory
 from agentscope.tool import Toolkit
 
@@ -118,18 +118,22 @@ OUTPUT FORMAT:
 """
 
 
-def get_model():
-    """Get the appropriate model based on available API keys."""
+def get_model_and_formatter():
+    """Get the appropriate model and formatter based on available API keys."""
     if GEMINI_API_KEY:
-        return GeminiChatModel(
+        model = GeminiChatModel(
             model_name="gemini-2.0-flash",
             api_key=GEMINI_API_KEY,
         )
+        formatter = GeminiChatFormatter()
+        return model, formatter
     elif OPENAI_API_KEY:
-        return OpenAIChatModel(
+        model = OpenAIChatModel(
             model_name="gpt-4o-mini",
             api_key=OPENAI_API_KEY,
         )
+        formatter = OpenAIChatFormatter()
+        return model, formatter
     else:
         raise ValueError("No LLM API key configured. Set GEMINI_API_KEY or OPENAI_API_KEY.")
 
@@ -167,8 +171,8 @@ async def run_analysis_async(query: str = "gold silver price news") -> str:
     print("[INFO] Initializing AgentScope...")
     agentscope.init(project="GoldSilverIntelligence", name="analysis")
 
-    # Step 3: Get model
-    model = get_model()
+    # Step 3: Get model and formatter
+    model, formatter = get_model_and_formatter()
 
     # Step 4: Create NewsHunter Agent
     print("[INFO] Creating NewsHunter agent...")
@@ -177,7 +181,7 @@ async def run_analysis_async(query: str = "gold silver price news") -> str:
         sys_prompt=NEWS_HUNTER_PROMPT,
         model=model,
         memory=InMemoryMemory(),
-        formatter=BasicFormatter(),
+        formatter=formatter,
         toolkit=Toolkit(),
     )
 
@@ -188,7 +192,7 @@ async def run_analysis_async(query: str = "gold silver price news") -> str:
         sys_prompt=MARKET_ANALYST_PROMPT,
         model=model,
         memory=InMemoryMemory(),
-        formatter=BasicFormatter(),
+        formatter=formatter,
         toolkit=Toolkit(),
     )
 
