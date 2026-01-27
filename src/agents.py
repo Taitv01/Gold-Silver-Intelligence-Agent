@@ -122,25 +122,15 @@ OUTPUT FORMAT:
 def get_model_and_formatter_with_fallback():
     """
     Try to get model with automatic fallback if primary fails.
-    Priority: Gemini -> GLM (via OpenAI-compatible API) -> OpenAI
+    Priority: GLM (if configured) -> Gemini -> OpenAI
+    
+    Note: GLM is prioritized first when configured because Gemini free tier
+    has strict rate limits (429 errors). GLM has more generous limits.
     """
     errors = []
     
-    # Priority 1: Try Gemini first
-    if GEMINI_API_KEY:
-        try:
-            print("[INFO] Trying Gemini API...")
-            model = GeminiChatModel(
-                model_name="gemini-2.0-flash",
-                api_key=GEMINI_API_KEY,
-            )
-            formatter = GeminiChatFormatter()
-            return model, formatter, "Gemini"
-        except Exception as e:
-            errors.append(f"Gemini: {e}")
-            print(f"[WARN] Gemini failed: {e}")
-    
-    # Priority 2: Fallback to GLM (ZhipuAI - uses OpenAI-compatible API)
+    # Priority 1: Try GLM first (ZhipuAI - uses OpenAI-compatible API)
+    # GLM is prioritized because Gemini free tier has strict rate limits
     if GLM_API_KEY:
         try:
             print("[INFO] Trying ZhipuAI GLM API (OpenAI-compatible)...")
@@ -154,6 +144,20 @@ def get_model_and_formatter_with_fallback():
         except Exception as e:
             errors.append(f"GLM: {e}")
             print(f"[WARN] GLM failed: {e}")
+    
+    # Priority 2: Fallback to Gemini
+    if GEMINI_API_KEY:
+        try:
+            print("[INFO] Trying Gemini API...")
+            model = GeminiChatModel(
+                model_name="gemini-2.0-flash",
+                api_key=GEMINI_API_KEY,
+            )
+            formatter = GeminiChatFormatter()
+            return model, formatter, "Gemini"
+        except Exception as e:
+            errors.append(f"Gemini: {e}")
+            print(f"[WARN] Gemini failed: {e}")
     
     # Priority 3: Fallback to OpenAI
     if OPENAI_API_KEY:
