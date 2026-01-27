@@ -1,15 +1,19 @@
 """
 Gold-Silver-Intelligence Agents Module
-Defines NewsHunter and MarketAnalyst agents using AgentScope.
-Updated for AgentScope 1.0+ API compatibility.
+Rewritten for AgentScope 1.0+ API (async-based).
 """
+import os
+import asyncio
 import requests
 import agentscope
 from agentscope.agent import ReActAgent
 from agentscope.message import Msg
-from agentscope.model import ModelResponse
+from agentscope.model import GeminiChatModel, OpenAIChatModel
+from agentscope.formatter import BasicFormatter
+from agentscope.memory import InMemoryMemory
+from agentscope.tool import Toolkit
 
-from src.config import MODEL_CONFIG, SERPER_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY
+from src.config import SERPER_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY
 
 
 def search_news(query: str, num_results: int = 10) -> list:
@@ -114,65 +118,25 @@ OUTPUT FORMAT:
 """
 
 
-def get_model_config():
-    """Get the appropriate model configuration based on available API keys."""
+def get_model():
+    """Get the appropriate model based on available API keys."""
     if GEMINI_API_KEY:
-        return {
-            "config_name": "gemini",
-            "model_type": "gemini_chat",
-            "model_name": "gemini-2.0-flash",
-            "api_key": GEMINI_API_KEY,
-        }
+        return GeminiChatModel(
+            model_name="gemini-2.0-flash",
+            api_key=GEMINI_API_KEY,
+        )
     elif OPENAI_API_KEY:
-        return {
-            "config_name": "openai",
-            "model_type": "openai_chat",
-            "model_name": "gpt-4o-mini",
-            "api_key": OPENAI_API_KEY,
-        }
+        return OpenAIChatModel(
+            model_name="gpt-4o-mini",
+            api_key=OPENAI_API_KEY,
+        )
     else:
         raise ValueError("No LLM API key configured. Set GEMINI_API_KEY or OPENAI_API_KEY.")
 
 
-def initialize_agents():
+async def run_analysis_async(query: str = "gold silver price news") -> str:
     """
-    Initialize AgentScope and create agents.
-    Updated for AgentScope 1.0+ API.
-
-    Returns:
-        Tuple of (news_hunter, market_analyst) agents
-    """
-    # Initialize AgentScope (new API - no model_configs parameter)
-    agentscope.init(
-        project="GoldSilverIntelligence",
-        name="analysis_run",
-    )
-
-    # Get model configuration
-    model_config = get_model_config()
-
-    # Create NewsHunter Agent with model config passed directly
-    news_hunter = ReActAgent(
-        name="NewsHunter",
-        sys_prompt=NEWS_HUNTER_PROMPT,
-        model_config_name=model_config["config_name"],
-        model_configs=[model_config],  # Pass config directly to agent
-    )
-
-    # Create MarketAnalyst Agent
-    market_analyst = ReActAgent(
-        name="MarketAnalyst",
-        sys_prompt=MARKET_ANALYST_PROMPT,
-        model_config_name=model_config["config_name"],
-        model_configs=[model_config],  # Pass config directly to agent
-    )
-
-    return news_hunter, market_analyst
-
-
-def run_analysis_pipeline(query: str = "gold silver price news") -> str:
-    """
-    Run the full analysis pipeline.
+    Run the full analysis pipeline (async version).
 
     Args:
         query: Search query for news
@@ -199,30 +163,70 @@ def run_analysis_pipeline(query: str = "gold silver price news") -> str:
 
     print(f"[INFO] Found {len(news_items)} news articles.")
 
-    # Step 2: Initialize agents
-    print("[INFO] Initializing agents...")
-    news_hunter, market_analyst = initialize_agents()
+    # Step 2: Initialize AgentScope
+    print("[INFO] Initializing AgentScope...")
+    agentscope.init(project="GoldSilverIntelligence", name="analysis")
 
-    # Step 3: NewsHunter filters important news
+    # Step 3: Get model
+    model = get_model()
+
+    # Step 4: Create NewsHunter Agent
+    print("[INFO] Creating NewsHunter agent...")
+    news_hunter = ReActAgent(
+        name="NewsHunter",
+        sys_prompt=NEWS_HUNTER_PROMPT,
+        model=model,
+        memory=InMemoryMemory(),
+        formatter=BasicFormatter(),
+        toolkit=Toolkit(),
+    )
+
+    # Step 5: Create MarketAnalyst Agent
+    print("[INFO] Creating MarketAnalyst agent...")
+    market_analyst = ReActAgent(
+        name="MarketAnalyst",
+        sys_prompt=MARKET_ANALYST_PROMPT,
+        model=model,
+        memory=InMemoryMemory(),
+        formatter=BasicFormatter(),
+        toolkit=Toolkit(),
+    )
+
+    # Step 6: NewsHunter filters important news
     print("[INFO] NewsHunter analyzing news...")
     hunter_input = Msg(
         name="user",
         content=f"Phân tích và lọc các tin tức sau:\n\n{news_text}",
         role="user"
     )
-    hunter_response = news_hunter(hunter_input)
+    hunter_response = await news_hunter(hunter_input)
+    hunter_content = hunter_response.get_text_content() if hasattr(hunter_response, 'get_text_content') else str(hunter_response.content)
 
-    # Step 4: MarketAnalyst provides insights
+    # Step 7: MarketAnalyst provides insights
     print("[INFO] MarketAnalyst generating report...")
     analyst_input = Msg(
         name="NewsHunter",
-        content=f"Dựa trên các tin tức đã lọc sau đây, hãy phân tích xu hướng giá Vàng/Bạc:\n\n{hunter_response.content}",
+        content=f"Dựa trên các tin tức đã lọc sau đây, hãy phân tích xu hướng giá Vàng/Bạc:\n\n{hunter_content}",
         role="user"
     )
-    analyst_response = market_analyst(analyst_input)
+    analyst_response = await market_analyst(analyst_input)
+    analyst_content = analyst_response.get_text_content() if hasattr(analyst_response, 'get_text_content') else str(analyst_response.content)
 
     # Combine reports
-    final_report = f"{hunter_response.content}\n\n---\n\n{analyst_response.content}"
+    final_report = f"{hunter_content}\n\n---\n\n{analyst_content}"
 
     print("[INFO] Analysis pipeline completed.")
     return final_report
+
+
+def run_analysis_pipeline(query: str = "gold silver price news") -> str:
+    """
+    Run the full analysis pipeline (sync wrapper).
+    
+    Args:
+        query: Search query for news
+
+    Returns:
+        Final analysis report as string
+    """
+    return asyncio.run(run_analysis_async(query))
