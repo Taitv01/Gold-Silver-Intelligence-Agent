@@ -230,3 +230,79 @@ async def run_analysis_async(query: str = "gold silver price news") -> str:
 
     # Format news for agent
     news_text = "\n\n".join([
+        f"📰 {item['title']}\n"
+        f"   Nguồn: {item['source']} | {item['date']}\n"
+        f"   {item['snippet']}"
+        for item in news_items[:8]  # Limit to 8 articles
+    ])
+
+    print(f"[INFO] Found {len(news_items)} news articles.")
+
+    # Step 2: Initialize AgentScope
+    print("[INFO] Initializing AgentScope...")
+    agentscope.init(project="GoldSilverIntelligence", name="analysis")
+
+    # Step 3: Get model and formatter with fallback support
+    model, formatter, provider = get_model_and_formatter_with_fallback()
+    print(f"[INFO] Using {provider} as LLM provider")
+
+    # Step 4: Create NewsHunter Agent
+    print("[INFO] Creating NewsHunter agent...")
+    news_hunter = ReActAgent(
+        name="NewsHunter",
+        sys_prompt=NEWS_HUNTER_PROMPT,
+        model=model,
+        memory=InMemoryMemory(),
+        formatter=formatter,
+        toolkit=Toolkit(),
+    )
+
+    # Step 5: Create MarketAnalyst Agent
+    print("[INFO] Creating MarketAnalyst agent...")
+    market_analyst = ReActAgent(
+        name="MarketAnalyst",
+        sys_prompt=MARKET_ANALYST_PROMPT,
+        model=model,
+        memory=InMemoryMemory(),
+        formatter=formatter,
+        toolkit=Toolkit(),
+    )
+
+    # Step 6: NewsHunter filters important news
+    print("[INFO] NewsHunter analyzing news...")
+    hunter_input = Msg(
+        name="user",
+        content=f"Phân tích và lọc các tin tức sau:\n\n{news_text}",
+        role="user"
+    )
+    hunter_response = await news_hunter(hunter_input)
+    hunter_content = hunter_response.get_text_content() if hasattr(hunter_response, 'get_text_content') else str(hunter_response.content)
+
+    # Step 7: MarketAnalyst provides insights
+    print("[INFO] MarketAnalyst generating report...")
+    analyst_input = Msg(
+        name="NewsHunter",
+        content=f"Dựa trên các tin tức đã lọc sau đây, hãy phân tích xu hướng giá Vàng/Bạc:\n\n{hunter_content}",
+        role="user"
+    )
+    analyst_response = await market_analyst(analyst_input)
+    analyst_content = analyst_response.get_text_content() if hasattr(analyst_response, 'get_text_content') else str(analyst_response.content)
+
+    # Combine reports
+    final_report = f"🤖 *Powered by {provider}*\n\n{hunter_content}\n\n---\n\n{analyst_content}"
+
+    print("[INFO] Analysis pipeline completed.")
+    return final_report
+
+
+def run_analysis_pipeline(query: str = "gold silver price news") -> str:
+    """
+    Run the full analysis pipeline (sync wrapper).
+    
+    Args:
+        query: Search query for news
+
+    Returns:
+        Final analysis report as string
+    """
+    return asyncio.run(run_analysis_async(query))
