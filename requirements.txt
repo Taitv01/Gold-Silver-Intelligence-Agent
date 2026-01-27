@@ -1,5 +1,4 @@
-# Pin agentscope to a stable version that supports model_configs in init()
-agentscope==0.1.0
+# AgentScope 1.0+ requirements
+agentscope>=1.0.0
 requests
 python-dotenv
-google-search-results
