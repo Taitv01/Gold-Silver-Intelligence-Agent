@@ -1,7 +1,7 @@
 """
 Gold-Silver-Intelligence Agents Module
 Rewritten for AgentScope 1.0+ API (async-based).
-Supports: Gemini, ZhipuAI (GLM), OpenAI as fallback.
+Supports: Gemini (primary), OpenAI-compatible APIs (fallback)
 """
 import os
 import asyncio
@@ -9,8 +9,8 @@ import requests
 import agentscope
 from agentscope.agent import ReActAgent
 from agentscope.message import Msg
-from agentscope.model import GeminiChatModel, OpenAIChatModel, ZhipuAIChatModel
-from agentscope.formatter import GeminiChatFormatter, OpenAIChatFormatter, ZhipuAIChatFormatter
+from agentscope.model import GeminiChatModel, OpenAIChatModel
+from agentscope.formatter import GeminiChatFormatter, OpenAIChatFormatter
 from agentscope.memory import InMemoryMemory
 from agentscope.tool import Toolkit
 
@@ -119,52 +119,14 @@ OUTPUT FORMAT:
 """
 
 
-def get_model_and_formatter():
-    """
-    Get the appropriate model and formatter based on available API keys.
-    Priority: Gemini -> GLM (ZhipuAI) -> OpenAI
-    """
-    # Priority 1: Gemini
-    if GEMINI_API_KEY:
-        print("[INFO] Using Gemini API (gemini-2.0-flash)")
-        model = GeminiChatModel(
-            model_name="gemini-2.0-flash",
-            api_key=GEMINI_API_KEY,
-        )
-        formatter = GeminiChatFormatter()
-        return model, formatter
-    
-    # Priority 2: ZhipuAI (GLM)
-    if GLM_API_KEY:
-        print("[INFO] Using ZhipuAI GLM API (glm-4-flash)")
-        model = ZhipuAIChatModel(
-            model_name="glm-4-flash",
-            api_key=GLM_API_KEY,
-        )
-        formatter = ZhipuAIChatFormatter()
-        return model, formatter
-    
-    # Priority 3: OpenAI
-    if OPENAI_API_KEY:
-        print("[INFO] Using OpenAI API (gpt-4o-mini)")
-        model = OpenAIChatModel(
-            model_name="gpt-4o-mini",
-            api_key=OPENAI_API_KEY,
-        )
-        formatter = OpenAIChatFormatter()
-        return model, formatter
-    
-    raise ValueError("No LLM API key configured. Set GEMINI_API_KEY, GLM_API_KEY, or OPENAI_API_KEY.")
-
-
 def get_model_and_formatter_with_fallback():
     """
     Try to get model with automatic fallback if primary fails.
-    Tries: Gemini -> GLM -> OpenAI
+    Priority: Gemini -> GLM (via OpenAI-compatible API) -> OpenAI
     """
     errors = []
     
-    # Try Gemini first
+    # Priority 1: Try Gemini first
     if GEMINI_API_KEY:
         try:
             print("[INFO] Trying Gemini API...")
@@ -178,21 +140,22 @@ def get_model_and_formatter_with_fallback():
             errors.append(f"Gemini: {e}")
             print(f"[WARN] Gemini failed: {e}")
     
-    # Fallback to GLM
+    # Priority 2: Fallback to GLM (ZhipuAI - uses OpenAI-compatible API)
     if GLM_API_KEY:
         try:
-            print("[INFO] Trying ZhipuAI GLM API...")
-            model = ZhipuAIChatModel(
+            print("[INFO] Trying ZhipuAI GLM API (OpenAI-compatible)...")
+            model = OpenAIChatModel(
                 model_name="glm-4-flash",
                 api_key=GLM_API_KEY,
+                base_url="https://open.bigmodel.cn/api/paas/v4/",
             )
-            formatter = ZhipuAIChatFormatter()
+            formatter = OpenAIChatFormatter()
             return model, formatter, "GLM"
         except Exception as e:
             errors.append(f"GLM: {e}")
             print(f"[WARN] GLM failed: {e}")
     
-    # Fallback to OpenAI
+    # Priority 3: Fallback to OpenAI
     if OPENAI_API_KEY:
         try:
             print("[INFO] Trying OpenAI API...")
@@ -233,7 +196,7 @@ async def run_analysis_async(query: str = "gold silver price news") -> str:
         f"📰 {item['title']}\n"
         f"   Nguồn: {item['source']} | {item['date']}\n"
         f"   {item['snippet']}"
-        for item in news_items[:8]  # Limit to 8 articles
+        for item in news_items[:8]
     ])
 
     print(f"[INFO] Found {len(news_items)} news articles.")
