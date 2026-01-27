@@ -1,13 +1,15 @@
 """
 Gold-Silver-Intelligence Agents Module
 Defines NewsHunter and MarketAnalyst agents using AgentScope.
+Updated for AgentScope 1.0+ API compatibility.
 """
 import requests
 import agentscope
 from agentscope.agent import ReActAgent
 from agentscope.message import Msg
+from agentscope.model import ModelResponse
 
-from src.config import MODEL_CONFIG, SERPER_API_KEY
+from src.config import MODEL_CONFIG, SERPER_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY
 
 
 def search_news(query: str, num_results: int = 10) -> list:
@@ -112,31 +114,57 @@ OUTPUT FORMAT:
 """
 
 
+def get_model_config():
+    """Get the appropriate model configuration based on available API keys."""
+    if GEMINI_API_KEY:
+        return {
+            "config_name": "gemini",
+            "model_type": "gemini_chat",
+            "model_name": "gemini-2.0-flash",
+            "api_key": GEMINI_API_KEY,
+        }
+    elif OPENAI_API_KEY:
+        return {
+            "config_name": "openai",
+            "model_type": "openai_chat",
+            "model_name": "gpt-4o-mini",
+            "api_key": OPENAI_API_KEY,
+        }
+    else:
+        raise ValueError("No LLM API key configured. Set GEMINI_API_KEY or OPENAI_API_KEY.")
+
+
 def initialize_agents():
     """
     Initialize AgentScope and create agents.
+    Updated for AgentScope 1.0+ API.
 
     Returns:
         Tuple of (news_hunter, market_analyst) agents
     """
-    if not MODEL_CONFIG:
-        raise ValueError("No LLM API key configured. Check .env file.")
+    # Initialize AgentScope (new API - no model_configs parameter)
+    agentscope.init(
+        project="GoldSilverIntelligence",
+        name="analysis_run",
+    )
 
-    # Initialize AgentScope
-    agentscope.init(model_configs=[MODEL_CONFIG])
+    # Get model configuration
+    model_config = get_model_config()
 
-    # Create NewsHunter Agent
+    # Create NewsHunter Agent with model config passed directly
     news_hunter = ReActAgent(
         name="NewsHunter",
         sys_prompt=NEWS_HUNTER_PROMPT,
-        model_config_name=MODEL_CONFIG["config_name"],
+        model_config_name=model_config["config_name"],
+        model_configs=[model_config],  # Pass config directly to agent
     )
 
     # Create MarketAnalyst Agent
     market_analyst = ReActAgent(
         name="MarketAnalyst",
         sys_prompt=MARKET_ANALYST_PROMPT,
-        model_config_name=MODEL_CONFIG["config_name"],
+        model_config_name=model_config["config_name"],
+        model_configs=[model_config],  # Pass config directly to agent
     )
 
     return news_hunter, market_analyst
