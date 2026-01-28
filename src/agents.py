@@ -2,8 +2,10 @@
 Gold-Silver-Intelligence Agents Module
 Rewritten for AgentScope 1.0+ API (async-based).
 Supports: Gemini (primary), OpenAI-compatible APIs (fallback)
+Includes: Rate limit handling with retry logic
 """
 import os
+import time
 import asyncio
 import requests
 import agentscope
@@ -17,9 +19,15 @@ from agentscope.tool import Toolkit
 from src.config import SERPER_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY, GLM_API_KEY
 
 
+# === Rate Limit Configuration ===
+MAX_RETRIES = 3
+RETRY_DELAY_SECONDS = 5
+RATE_LIMIT_CODES = [429, 503]
+
+
 def search_news(query: str, num_results: int = 10) -> list:
     """
-    Search for news using Serper API.
+    Search for news using Serper API with retry logic.
 
     Args:
         query: Search query string
@@ -43,25 +51,44 @@ def search_news(query: str, num_results: int = 10) -> list:
         "tbs": "qdr:d"  # Last 24 hours
     }
 
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=15)
-        response.raise_for_status()
-        data = response.json()
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=15)
+            
+            # Handle rate limiting
+            if response.status_code in RATE_LIMIT_CODES:
+                if attempt < MAX_RETRIES - 1:
+                    wait_time = RETRY_DELAY_SECONDS * (attempt + 1)
+                    print(f"[WARN] Rate limited (attempt {attempt + 1}/{MAX_RETRIES}), waiting {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"[ERROR] Rate limit exceeded after {MAX_RETRIES} attempts")
+                    return []
+            
+            response.raise_for_status()
+            data = response.json()
 
-        news = []
-        for item in data.get("news", []):
-            news.append({
-                "title": item.get("title", ""),
-                "link": item.get("link", ""),
-                "snippet": item.get("snippet", ""),
-                "source": item.get("source", ""),
-                "date": item.get("date", "")
-            })
-        return news
+            news = []
+            for item in data.get("news", []):
+                news.append({
+                    "title": item.get("title", ""),
+                    "link": item.get("link", ""),
+                    "snippet": item.get("snippet", ""),
+                    "source": item.get("source", ""),
+                    "date": item.get("date", "")
+                })
+            return news
 
-    except requests.exceptions.RequestException as e:
-        print(f"[ERROR] Serper API request failed: {e}")
-        return []
+        except requests.exceptions.RequestException as e:
+            if attempt < MAX_RETRIES - 1:
+                print(f"[WARN] Request failed (attempt {attempt + 1}/{MAX_RETRIES}): {e}")
+                time.sleep(RETRY_DELAY_SECONDS)
+            else:
+                print(f"[ERROR] Serper API request failed after {MAX_RETRIES} attempts: {e}")
+                return []
+    
+    return []
 
 
 # === Agent System Prompts ===
@@ -122,15 +149,27 @@ OUTPUT FORMAT:
 def get_model_and_formatter_with_fallback():
     """
     Try to get model with automatic fallback if primary fails.
-    Priority: GLM (if configured) -> Gemini -> OpenAI
+    Priority: Gemini -> GLM (ZhipuAI) -> OpenAI
     
-    Note: GLM is prioritized first when configured because Gemini free tier
-    has strict rate limits (429 errors). GLM has more generous limits.
+    Note: Change priority order based on which API keys you have available.
     """
     errors = []
     
-    # Priority 1: Try GLM first (ZhipuAI - uses OpenAI-compatible API)
-    # GLM is prioritized because Gemini free tier has strict rate limits
+    # Priority 1: Try Gemini first
+    if GEMINI_API_KEY:
+        try:
+            print("[INFO] Trying Gemini API...")
+            model = GeminiChatModel(
+                model_name="gemini-2.0-flash",
+                api_key=GEMINI_API_KEY,
+            )
+            formatter = GeminiChatFormatter()
+            return model, formatter, "Gemini"
+        except Exception as e:
+            errors.append(f"Gemini: {e}")
+            print(f"[WARN] Gemini failed: {e}")
+    
+    # Priority 2: Fallback to GLM (ZhipuAI - uses OpenAI-compatible API)
     if GLM_API_KEY:
         try:
             print("[INFO] Trying ZhipuAI GLM API (OpenAI-compatible)...")
@@ -144,20 +183,6 @@ def get_model_and_formatter_with_fallback():
         except Exception as e:
             errors.append(f"GLM: {e}")
             print(f"[WARN] GLM failed: {e}")
-    
-    # Priority 2: Fallback to Gemini
-    if GEMINI_API_KEY:
-        try:
-            print("[INFO] Trying Gemini API...")
-            model = GeminiChatModel(
-                model_name="gemini-2.0-flash",
-                api_key=GEMINI_API_KEY,
-            )
-            formatter = GeminiChatFormatter()
-            return model, formatter, "Gemini"
-        except Exception as e:
-            errors.append(f"Gemini: {e}")
-            print(f"[WARN] Gemini failed: {e}")
     
     # Priority 3: Fallback to OpenAI
     if OPENAI_API_KEY:
@@ -176,9 +201,41 @@ def get_model_and_formatter_with_fallback():
     raise ValueError(f"All LLM APIs failed. Errors: {errors}")
 
 
+async def call_agent_with_retry(agent, input_msg, agent_name: str, max_retries: int = MAX_RETRIES):
+    """
+    Call an agent with retry logic for rate limit handling.
+    
+    Args:
+        agent: The agent to call
+        input_msg: Input message
+        agent_name: Name of the agent (for logging)
+        max_retries: Maximum number of retries
+        
+    Returns:
+        Agent response content as string
+    """
+    for attempt in range(max_retries):
+        try:
+            response = await agent(input_msg)
+            content = response.get_text_content() if hasattr(response, 'get_text_content') else str(response.content)
+            return content
+        except Exception as e:
+            error_str = str(e).lower()
+            is_rate_limit = "429" in error_str or "rate" in error_str or "quota" in error_str
+            
+            if is_rate_limit and attempt < max_retries - 1:
+                wait_time = RETRY_DELAY_SECONDS * (attempt + 1) * 2  # Exponential backoff
+                print(f"[WARN] {agent_name} rate limited (attempt {attempt + 1}/{max_retries}), waiting {wait_time}s...")
+                await asyncio.sleep(wait_time)
+            else:
+                raise e
+    
+    raise Exception(f"{agent_name} failed after {max_retries} attempts")
+
+
 async def run_analysis_async(query: str = "gold silver price news") -> str:
     """
-    Run the full analysis pipeline (async version).
+    Run the full analysis pipeline (async version) with rate limit handling.
 
     Args:
         query: Search query for news
@@ -235,25 +292,23 @@ async def run_analysis_async(query: str = "gold silver price news") -> str:
         toolkit=Toolkit(),
     )
 
-    # Step 6: NewsHunter filters important news
+    # Step 6: NewsHunter filters important news (with retry)
     print("[INFO] NewsHunter analyzing news...")
     hunter_input = Msg(
         name="user",
         content=f"Phân tích và lọc các tin tức sau:\n\n{news_text}",
         role="user"
     )
-    hunter_response = await news_hunter(hunter_input)
-    hunter_content = hunter_response.get_text_content() if hasattr(hunter_response, 'get_text_content') else str(hunter_response.content)
+    hunter_content = await call_agent_with_retry(news_hunter, hunter_input, "NewsHunter")
 
-    # Step 7: MarketAnalyst provides insights
+    # Step 7: MarketAnalyst provides insights (with retry)
     print("[INFO] MarketAnalyst generating report...")
     analyst_input = Msg(
         name="NewsHunter",
         content=f"Dựa trên các tin tức đã lọc sau đây, hãy phân tích xu hướng giá Vàng/Bạc:\n\n{hunter_content}",
         role="user"
     )
-    analyst_response = await market_analyst(analyst_input)
-    analyst_content = analyst_response.get_text_content() if hasattr(analyst_response, 'get_text_content') else str(analyst_response.content)
+    analyst_content = await call_agent_with_retry(market_analyst, analyst_input, "MarketAnalyst")
 
     # Combine reports
     final_report = f"🤖 *Powered by {provider}*\n\n{hunter_content}\n\n---\n\n{analyst_content}"
