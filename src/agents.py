@@ -1,6 +1,6 @@
 """
 Gold-Silver-Intelligence Agents Module
-Supports: Z.AI GLM (primary via OpenAI SDK), Gemini (fallback)
+Supports: Groq (primary), Z.AI GLM (fallback 1), Gemini (fallback 2)
 Includes: Rate limit handling with retry logic
 """
 import os
@@ -8,20 +8,13 @@ import time
 import asyncio
 import requests
 from openai import OpenAI
-import agentscope
-from agentscope.agent import ReActAgent
-from agentscope.message import Msg
-from agentscope.model import GeminiChatModel
-from agentscope.formatter import GeminiChatFormatter
-from agentscope.memory import InMemoryMemory
-from agentscope.tool import Toolkit
 
-from src.config import SERPER_API_KEY, GEMINI_API_KEY, ZAI_API_KEY
+from src.config import SERPER_API_KEY, GEMINI_API_KEY, ZAI_API_KEY, GROQ_API_KEY
 
 
 # === Rate Limit Configuration ===
 MAX_RETRIES = 3
-RETRY_DELAY_SECONDS = 30
+RETRY_DELAY_SECONDS = 10
 
 
 def search_news(query: str, num_results: int = 10) -> list:
@@ -82,34 +75,49 @@ def search_news(query: str, num_results: int = 10) -> list:
     return []
 
 
-# === Z.AI GLM via OpenAI SDK ===
+# === LLM Clients ===
+
+def get_groq_client():
+    """Get Groq client using OpenAI SDK."""
+    if not GROQ_API_KEY:
+        raise ValueError("GROQ_API_KEY not configured")
+    
+    return OpenAI(
+        api_key=GROQ_API_KEY,
+        base_url="https://api.groq.com/openai/v1"
+    )
+
 
 def get_zai_client():
-    """
-    Get Z.AI client using OpenAI SDK with base_url.
-    """
+    """Get Z.AI client using OpenAI SDK."""
     if not ZAI_API_KEY:
         raise ValueError("ZAI_API_KEY not configured")
     
-    client = OpenAI(
+    return OpenAI(
         api_key=ZAI_API_KEY,
-        base_url="https://api.z.ai/api/paas/v4/"  # Z.AI endpoint
+        base_url="https://api.z.ai/api/paas/v4/"
     )
-    return client
 
 
-def call_zai_glm(messages: list, system_prompt: str = "") -> str:
+def call_llm(messages: list, system_prompt: str = "", provider: str = "groq") -> str:
     """
-    Call Z.AI GLM API using OpenAI SDK.
+    Call LLM API using OpenAI SDK.
     
     Args:
         messages: List of message dicts with 'role' and 'content'
         system_prompt: System prompt for the model
+        provider: "groq" or "zai"
         
     Returns:
         Response text from the model
     """
-    client = get_zai_client()
+    # Get client based on provider
+    if provider == "groq":
+        client = get_groq_client()
+        model = "llama-3.3-70b-versatile"  # Groq's best free model
+    else:
+        client = get_zai_client()
+        model = "glm-4.7"
     
     # Build messages with system prompt
     api_messages = []
@@ -119,16 +127,17 @@ def call_zai_glm(messages: list, system_prompt: str = "") -> str:
     
     for attempt in range(MAX_RETRIES):
         try:
-            print(f"[DEBUG] Calling Z.AI GLM API via OpenAI SDK...")
+            print(f"[DEBUG] Calling {provider.upper()} API ({model})...")
             
             response = client.chat.completions.create(
-                model="glm-4.7",
+                model=model,
                 messages=api_messages,
                 temperature=0.7,
+                max_tokens=2048,
             )
             
             content = response.choices[0].message.content
-            print(f"[DEBUG] Z.AI response received successfully")
+            print(f"[DEBUG] {provider.upper()} response received successfully")
             return content
             
         except Exception as e:
@@ -137,13 +146,13 @@ def call_zai_glm(messages: list, system_prompt: str = "") -> str:
             
             if is_rate_limit and attempt < MAX_RETRIES - 1:
                 wait_time = RETRY_DELAY_SECONDS * (attempt + 1)
-                print(f"[WARN] Z.AI rate limited (attempt {attempt + 1}/{MAX_RETRIES}), waiting {wait_time}s...")
+                print(f"[WARN] {provider.upper()} rate limited (attempt {attempt + 1}/{MAX_RETRIES}), waiting {wait_time}s...")
                 time.sleep(wait_time)
             else:
-                print(f"[ERROR] Z.AI API error: {e}")
+                print(f"[ERROR] {provider.upper()} API error: {e}")
                 raise e
     
-    raise Exception("Z.AI API failed after all retries")
+    raise Exception(f"{provider.upper()} API failed after all retries")
 
 
 # === Agent System Prompts ===
@@ -201,11 +210,13 @@ OUTPUT FORMAT:
 """
 
 
-def run_analysis_with_zai(query: str = "gold silver price news") -> str:
+def run_analysis_with_llm(query: str, provider: str) -> str:
     """
-    Run analysis pipeline using Z.AI GLM API.
+    Run analysis pipeline with specified LLM provider.
     """
-    print(f"[INFO] Starting analysis pipeline with query: {query}")
+    provider_name = "Groq Llama-3.3-70B" if provider == "groq" else "Z.AI GLM-4.7"
+    print(f"[INFO] Starting analysis pipeline with {provider_name}")
+    print(f"[INFO] Query: {query}")
 
     # Step 1: Search for news
     print("[INFO] Fetching news from Serper API...")
@@ -225,107 +236,45 @@ def run_analysis_with_zai(query: str = "gold silver price news") -> str:
     print(f"[INFO] Found {len(news_items)} news articles.")
 
     # Step 2: NewsHunter analyzes news
-    print("[INFO] NewsHunter analyzing news (via Z.AI GLM)...")
+    print(f"[INFO] NewsHunter analyzing news (via {provider_name})...")
     hunter_messages = [{"role": "user", "content": f"Phân tích và lọc các tin tức sau:\n\n{news_text}"}]
-    hunter_content = call_zai_glm(hunter_messages, NEWS_HUNTER_PROMPT)
+    hunter_content = call_llm(hunter_messages, NEWS_HUNTER_PROMPT, provider)
 
     # Step 3: MarketAnalyst provides insights
-    print("[INFO] MarketAnalyst generating report (via Z.AI GLM)...")
+    print(f"[INFO] MarketAnalyst generating report (via {provider_name})...")
     analyst_messages = [{"role": "user", "content": f"Dựa trên các tin tức đã lọc sau đây, hãy phân tích xu hướng giá Vàng/Bạc:\n\n{hunter_content}"}]
-    analyst_content = call_zai_glm(analyst_messages, MARKET_ANALYST_PROMPT)
+    analyst_content = call_llm(analyst_messages, MARKET_ANALYST_PROMPT, provider)
 
     # Combine reports
-    final_report = f"🤖 *Powered by Z.AI GLM-4.7*\n\n{hunter_content}\n\n---\n\n{analyst_content}"
+    final_report = f"🤖 *Powered by {provider_name}*\n\n{hunter_content}\n\n---\n\n{analyst_content}"
 
     print("[INFO] Analysis pipeline completed.")
     return final_report
 
 
-async def run_analysis_with_gemini(query: str = "gold silver price news") -> str:
-    """
-    Run analysis pipeline using Gemini via AgentScope.
-    """
-    print(f"[INFO] Starting analysis pipeline with query: {query}")
-
-    # Step 1: Search for news
-    print("[INFO] Fetching news from Serper API...")
-    news_items = search_news(query)
-
-    if not news_items:
-        return "❌ Không tìm thấy tin tức nào. Vui lòng thử lại sau."
-
-    # Format news
-    news_text = "\n\n".join([
-        f"📰 {item['title']}\n"
-        f"   Nguồn: {item['source']} | {item['date']}\n"
-        f"   {item['snippet']}"
-        for item in news_items[:8]
-    ])
-
-    print(f"[INFO] Found {len(news_items)} news articles.")
-
-    # Initialize AgentScope and use Gemini
-    print("[INFO] Initializing AgentScope with Gemini...")
-    agentscope.init(project="GoldSilverIntelligence", name="analysis")
-    
-    model = GeminiChatModel(
-        model_name="gemini-2.0-flash",
-        api_key=GEMINI_API_KEY,
-    )
-    formatter = GeminiChatFormatter()
-    
-    # Create agents
-    news_hunter = ReActAgent(
-        name="NewsHunter",
-        sys_prompt=NEWS_HUNTER_PROMPT,
-        model=model,
-        memory=InMemoryMemory(),
-        formatter=formatter,
-        toolkit=Toolkit(),
-    )
-    
-    market_analyst = ReActAgent(
-        name="MarketAnalyst",
-        sys_prompt=MARKET_ANALYST_PROMPT,
-        model=model,
-        memory=InMemoryMemory(),
-        formatter=formatter,
-        toolkit=Toolkit(),
-    )
-    
-    # Run agents
-    hunter_input = Msg(name="user", content=f"Phân tích và lọc các tin tức sau:\n\n{news_text}", role="user")
-    hunter_response = await news_hunter(hunter_input)
-    hunter_content = hunter_response.get_text_content() if hasattr(hunter_response, 'get_text_content') else str(hunter_response.content)
-    
-    analyst_input = Msg(name="NewsHunter", content=f"Dựa trên các tin tức đã lọc sau đây, hãy phân tích xu hướng giá Vàng/Bạc:\n\n{hunter_content}", role="user")
-    analyst_response = await market_analyst(analyst_input)
-    analyst_content = analyst_response.get_text_content() if hasattr(analyst_response, 'get_text_content') else str(analyst_response.content)
-    
-    final_report = f"🤖 *Powered by Gemini*\n\n{hunter_content}\n\n---\n\n{analyst_content}"
-    print("[INFO] Analysis pipeline completed.")
-    return final_report
-
-
-def run_analysis_pipeline(query: str = "gold silver price news") -> str:
+def run_analysis_pipeline(query: str = "gold silver price news Fed interest rate") -> str:
     """
     Run the full analysis pipeline with fallback.
-    Priority: Z.AI GLM -> Gemini
+    Priority: Groq -> Z.AI GLM -> Gemini
     """
-    # Try Z.AI GLM first
+    # Try Groq first (best free option)
+    if GROQ_API_KEY:
+        try:
+            print("[INFO] Using Groq API (Priority 1) - FREE with generous limits...")
+            return run_analysis_with_llm(query, "groq")
+        except Exception as e:
+            print(f"[WARN] Groq failed: {e}")
+    
+    # Fallback to Z.AI GLM
     if ZAI_API_KEY:
         try:
-            print("[INFO] Using Z.AI GLM API (Priority 1) via OpenAI SDK...")
-            return run_analysis_with_zai(query)
+            print("[INFO] Using Z.AI GLM API (Fallback 1)...")
+            return run_analysis_with_llm(query, "zai")
         except Exception as e:
             print(f"[WARN] Z.AI GLM failed: {e}")
     
-    # Fallback to Gemini
+    # Fallback to Gemini (if implemented)
     if GEMINI_API_KEY:
-        try:
-            print("[INFO] Using Gemini API (Fallback)...")
-            return asyncio.run(run_analysis_with_gemini(query))
-        except Exception as e:
-            print(f"[WARN] Gemini failed: {e}")
+        print("[INFO] Gemini fallback not implemented in simplified version")
     
-    return "❌ Không có LLM API khả dụng. Vui lòng kiểm tra ZAI_API_KEY hoặc GEMINI_API_KEY."
+    return "❌ Không có LLM API khả dụng. Vui lòng kiểm tra GROQ_API_KEY, ZAI_API_KEY hoặc GEMINI_API_KEY."
