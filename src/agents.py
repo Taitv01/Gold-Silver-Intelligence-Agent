@@ -1,7 +1,7 @@
 """
 Gold-Silver-Intelligence Agents Module
 Rewritten for AgentScope 1.0+ API (async-based).
-Supports: Gemini (primary), OpenAI-compatible APIs (fallback)
+Supports: Gemini (via AgentScope), ZhipuAI GLM (direct API)
 Includes: Rate limit handling with retry logic
 """
 import os
@@ -28,13 +28,6 @@ RATE_LIMIT_CODES = [429, 503]
 def search_news(query: str, num_results: int = 10) -> list:
     """
     Search for news using Serper API with retry logic.
-
-    Args:
-        query: Search query string
-        num_results: Number of results to return
-
-    Returns:
-        List of news articles with title, link, snippet
     """
     if not SERPER_API_KEY:
         print("[ERROR] SERPER_API_KEY not configured.")
@@ -48,14 +41,13 @@ def search_news(query: str, num_results: int = 10) -> list:
     payload = {
         "q": query,
         "num": num_results,
-        "tbs": "qdr:d"  # Last 24 hours
+        "tbs": "qdr:d"
     }
 
     for attempt in range(MAX_RETRIES):
         try:
             response = requests.post(url, json=payload, headers=headers, timeout=15)
             
-            # Handle rate limiting
             if response.status_code in RATE_LIMIT_CODES:
                 if attempt < MAX_RETRIES - 1:
                     wait_time = RETRY_DELAY_SECONDS * (attempt + 1)
@@ -89,6 +81,67 @@ def search_news(query: str, num_results: int = 10) -> list:
                 return []
     
     return []
+
+
+# === Direct ZhipuAI API Integration ===
+
+def call_zhipuai_chat(messages: list, system_prompt: str = "") -> str:
+    """
+    Call ZhipuAI GLM API directly (bypassing AgentScope).
+    
+    Args:
+        messages: List of message dicts with 'role' and 'content'
+        system_prompt: System prompt for the model
+        
+    Returns:
+        Response text from the model
+    """
+    if not GLM_API_KEY:
+        raise ValueError("GLM_API_KEY not configured")
+    
+    url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GLM_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    # Build messages with system prompt
+    api_messages = []
+    if system_prompt:
+        api_messages.append({"role": "system", "content": system_prompt})
+    api_messages.extend(messages)
+    
+    payload = {
+        "model": "glm-4-flash",
+        "messages": api_messages,
+        "temperature": 0.7,
+        "max_tokens": 2048
+    }
+    
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=60)
+            
+            if response.status_code in RATE_LIMIT_CODES:
+                if attempt < MAX_RETRIES - 1:
+                    wait_time = RETRY_DELAY_SECONDS * (attempt + 1) * 2
+                    print(f"[WARN] GLM rate limited (attempt {attempt + 1}/{MAX_RETRIES}), waiting {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            return data["choices"][0]["message"]["content"]
+            
+        except requests.exceptions.RequestException as e:
+            if attempt < MAX_RETRIES - 1:
+                print(f"[WARN] GLM request failed (attempt {attempt + 1}/{MAX_RETRIES}): {e}")
+                time.sleep(RETRY_DELAY_SECONDS)
+            else:
+                raise Exception(f"GLM API failed after {MAX_RETRIES} attempts: {e}")
+    
+    raise Exception("GLM API failed")
 
 
 # === Agent System Prompts ===
@@ -146,103 +199,9 @@ OUTPUT FORMAT:
 """
 
 
-def get_model_and_formatter_with_fallback():
+def run_analysis_with_glm(query: str = "gold silver price news") -> str:
     """
-    Try to get model with automatic fallback if primary fails.
-    Priority: GLM (ZhipuAI) -> Gemini -> OpenAI
-    
-    Note: GLM is prioritized because Gemini free tier has strict rate limits.
-    """
-    errors = []
-    
-    # Priority 1: Try GLM first (ZhipuAI - uses OpenAI-compatible API)
-    # GLM is prioritized because Gemini free tier has strict rate limits
-    if GLM_API_KEY:
-        try:
-            print("[INFO] Trying ZhipuAI GLM API (OpenAI-compatible)...")
-            model = OpenAIChatModel(
-                model_name="glm-4-flash",
-                api_key=GLM_API_KEY,
-                base_url="https://open.bigmodel.cn/api/paas/v4/",
-            )
-            formatter = OpenAIChatFormatter()
-            return model, formatter, "GLM"
-        except Exception as e:
-            errors.append(f"GLM: {e}")
-            print(f"[WARN] GLM failed: {e}")
-    
-    # Priority 2: Fallback to Gemini
-    if GEMINI_API_KEY:
-        try:
-            print("[INFO] Trying Gemini API...")
-            model = GeminiChatModel(
-                model_name="gemini-2.0-flash",
-                api_key=GEMINI_API_KEY,
-            )
-            formatter = GeminiChatFormatter()
-            return model, formatter, "Gemini"
-        except Exception as e:
-            errors.append(f"Gemini: {e}")
-            print(f"[WARN] Gemini failed: {e}")
-    
-    # Priority 3: Fallback to OpenAI
-    if OPENAI_API_KEY:
-        try:
-            print("[INFO] Trying OpenAI API...")
-            model = OpenAIChatModel(
-                model_name="gpt-4o-mini",
-                api_key=OPENAI_API_KEY,
-            )
-            formatter = OpenAIChatFormatter()
-            return model, formatter, "OpenAI"
-        except Exception as e:
-            errors.append(f"OpenAI: {e}")
-            print(f"[WARN] OpenAI failed: {e}")
-    
-    raise ValueError(f"All LLM APIs failed. Errors: {errors}")
-
-
-async def call_agent_with_retry(agent, input_msg, agent_name: str, max_retries: int = MAX_RETRIES):
-    """
-    Call an agent with retry logic for rate limit handling.
-    
-    Args:
-        agent: The agent to call
-        input_msg: Input message
-        agent_name: Name of the agent (for logging)
-        max_retries: Maximum number of retries
-        
-    Returns:
-        Agent response content as string
-    """
-    for attempt in range(max_retries):
-        try:
-            response = await agent(input_msg)
-            content = response.get_text_content() if hasattr(response, 'get_text_content') else str(response.content)
-            return content
-        except Exception as e:
-            error_str = str(e).lower()
-            is_rate_limit = "429" in error_str or "rate" in error_str or "quota" in error_str
-            
-            if is_rate_limit and attempt < max_retries - 1:
-                wait_time = RETRY_DELAY_SECONDS * (attempt + 1) * 2  # Exponential backoff
-                print(f"[WARN] {agent_name} rate limited (attempt {attempt + 1}/{max_retries}), waiting {wait_time}s...")
-                await asyncio.sleep(wait_time)
-            else:
-                raise e
-    
-    raise Exception(f"{agent_name} failed after {max_retries} attempts")
-
-
-async def run_analysis_async(query: str = "gold silver price news") -> str:
-    """
-    Run the full analysis pipeline (async version) with rate limit handling.
-
-    Args:
-        query: Search query for news
-
-    Returns:
-        Final analysis report as string
+    Run analysis pipeline using direct ZhipuAI GLM API calls.
     """
     print(f"[INFO] Starting analysis pipeline with query: {query}")
 
@@ -253,7 +212,7 @@ async def run_analysis_async(query: str = "gold silver price news") -> str:
     if not news_items:
         return "❌ Không tìm thấy tin tức nào. Vui lòng thử lại sau."
 
-    # Format news for agent
+    # Format news
     news_text = "\n\n".join([
         f"📰 {item['title']}\n"
         f"   Nguồn: {item['source']} | {item['date']}\n"
@@ -263,16 +222,57 @@ async def run_analysis_async(query: str = "gold silver price news") -> str:
 
     print(f"[INFO] Found {len(news_items)} news articles.")
 
-    # Step 2: Initialize AgentScope
-    print("[INFO] Initializing AgentScope...")
+    # Step 2: NewsHunter analyzes news
+    print("[INFO] NewsHunter analyzing news (via GLM direct API)...")
+    hunter_messages = [{"role": "user", "content": f"Phân tích và lọc các tin tức sau:\n\n{news_text}"}]
+    hunter_content = call_zhipuai_chat(hunter_messages, NEWS_HUNTER_PROMPT)
+
+    # Step 3: MarketAnalyst provides insights
+    print("[INFO] MarketAnalyst generating report (via GLM direct API)...")
+    analyst_messages = [{"role": "user", "content": f"Dựa trên các tin tức đã lọc sau đây, hãy phân tích xu hướng giá Vàng/Bạc:\n\n{hunter_content}"}]
+    analyst_content = call_zhipuai_chat(analyst_messages, MARKET_ANALYST_PROMPT)
+
+    # Combine reports
+    final_report = f"🤖 *Powered by ZhipuAI GLM*\n\n{hunter_content}\n\n---\n\n{analyst_content}"
+
+    print("[INFO] Analysis pipeline completed.")
+    return final_report
+
+
+def run_analysis_with_gemini(query: str = "gold silver price news") -> str:
+    """
+    Run analysis pipeline using Gemini via AgentScope.
+    """
+    print(f"[INFO] Starting analysis pipeline with query: {query}")
+
+    # Step 1: Search for news
+    print("[INFO] Fetching news from Serper API...")
+    news_items = search_news(query)
+
+    if not news_items:
+        return "❌ Không tìm thấy tin tức nào. Vui lòng thử lại sau."
+
+    # Format news
+    news_text = "\n\n".join([
+        f"📰 {item['title']}\n"
+        f"   Nguồn: {item['source']} | {item['date']}\n"
+        f"   {item['snippet']}"
+        for item in news_items[:8]
+    ])
+
+    print(f"[INFO] Found {len(news_items)} news articles.")
+
+    # Initialize AgentScope and use Gemini
+    print("[INFO] Initializing AgentScope with Gemini...")
     agentscope.init(project="GoldSilverIntelligence", name="analysis")
-
-    # Step 3: Get model and formatter with fallback support
-    model, formatter, provider = get_model_and_formatter_with_fallback()
-    print(f"[INFO] Using {provider} as LLM provider")
-
-    # Step 4: Create NewsHunter Agent
-    print("[INFO] Creating NewsHunter agent...")
+    
+    model = GeminiChatModel(
+        model_name="gemini-2.0-flash",
+        api_key=GEMINI_API_KEY,
+    )
+    formatter = GeminiChatFormatter()
+    
+    # Create agents
     news_hunter = ReActAgent(
         name="NewsHunter",
         sys_prompt=NEWS_HUNTER_PROMPT,
@@ -281,9 +281,7 @@ async def run_analysis_async(query: str = "gold silver price news") -> str:
         formatter=formatter,
         toolkit=Toolkit(),
     )
-
-    # Step 5: Create MarketAnalyst Agent
-    print("[INFO] Creating MarketAnalyst agent...")
+    
     market_analyst = ReActAgent(
         name="MarketAnalyst",
         sys_prompt=MARKET_ANALYST_PROMPT,
@@ -292,40 +290,45 @@ async def run_analysis_async(query: str = "gold silver price news") -> str:
         formatter=formatter,
         toolkit=Toolkit(),
     )
-
-    # Step 6: NewsHunter filters important news (with retry)
-    print("[INFO] NewsHunter analyzing news...")
-    hunter_input = Msg(
-        name="user",
-        content=f"Phân tích và lọc các tin tức sau:\n\n{news_text}",
-        role="user"
-    )
-    hunter_content = await call_agent_with_retry(news_hunter, hunter_input, "NewsHunter")
-
-    # Step 7: MarketAnalyst provides insights (with retry)
-    print("[INFO] MarketAnalyst generating report...")
-    analyst_input = Msg(
-        name="NewsHunter",
-        content=f"Dựa trên các tin tức đã lọc sau đây, hãy phân tích xu hướng giá Vàng/Bạc:\n\n{hunter_content}",
-        role="user"
-    )
-    analyst_content = await call_agent_with_retry(market_analyst, analyst_input, "MarketAnalyst")
-
-    # Combine reports
-    final_report = f"🤖 *Powered by {provider}*\n\n{hunter_content}\n\n---\n\n{analyst_content}"
-
+    
+    # Run async pipeline
+    async def run_agents():
+        hunter_input = Msg(name="user", content=f"Phân tích và lọc các tin tức sau:\n\n{news_text}", role="user")
+        hunter_response = await news_hunter(hunter_input)
+        hunter_content = hunter_response.get_text_content() if hasattr(hunter_response, 'get_text_content') else str(hunter_response.content)
+        
+        analyst_input = Msg(name="NewsHunter", content=f"Dựa trên các tin tức đã lọc sau đây, hãy phân tích xu hướng giá Vàng/Bạc:\n\n{hunter_content}", role="user")
+        analyst_response = await market_analyst(analyst_input)
+        analyst_content = analyst_response.get_text_content() if hasattr(analyst_response, 'get_text_content') else str(analyst_response.content)
+        
+        return hunter_content, analyst_content
+    
+    hunter_content, analyst_content = asyncio.run(run_agents())
+    
+    final_report = f"🤖 *Powered by Gemini*\n\n{hunter_content}\n\n---\n\n{analyst_content}"
     print("[INFO] Analysis pipeline completed.")
     return final_report
 
 
 def run_analysis_pipeline(query: str = "gold silver price news") -> str:
     """
-    Run the full analysis pipeline (sync wrapper).
-    
-    Args:
-        query: Search query for news
-
-    Returns:
-        Final analysis report as string
+    Run the full analysis pipeline with fallback.
+    Priority: GLM (direct API) -> Gemini (AgentScope)
     """
-    return asyncio.run(run_analysis_async(query))
+    # Try GLM first (direct API call)
+    if GLM_API_KEY:
+        try:
+            print("[INFO] Using ZhipuAI GLM (direct API)...")
+            return run_analysis_with_glm(query)
+        except Exception as e:
+            print(f"[WARN] GLM failed: {e}")
+    
+    # Fallback to Gemini
+    if GEMINI_API_KEY:
+        try:
+            print("[INFO] Using Gemini (AgentScope)...")
+            return run_analysis_with_gemini(query)
+        except Exception as e:
+            print(f"[WARN] Gemini failed: {e}")
+    
+    return "❌ Không có LLM API khả dụng. Vui lòng kiểm tra API keys."
