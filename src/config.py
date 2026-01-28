@@ -22,6 +22,10 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # === Log available API keys ===
+print(f"[DEBUG] GLM_API_KEY present: {bool(GLM_API_KEY)}, length: {len(GLM_API_KEY) if GLM_API_KEY else 0}")
+print(f"[DEBUG] GEMINI_API_KEY present: {bool(GEMINI_API_KEY)}, length: {len(GEMINI_API_KEY) if GEMINI_API_KEY else 0}")
+print(f"[DEBUG] OPENAI_API_KEY present: {bool(OPENAI_API_KEY)}, length: {len(OPENAI_API_KEY) if OPENAI_API_KEY else 0}")
+
 available_apis = []
 if GLM_API_KEY:
     available_apis.append("ZhipuAI (GLM) [Priority 1]")
