@@ -1,12 +1,13 @@
 """
 Gold-Silver-Intelligence Agents Module
-Supports: Z.AI GLM (primary), Gemini (fallback)
+Supports: Z.AI GLM (primary via OpenAI SDK), Gemini (fallback)
 Includes: Rate limit handling with retry logic
 """
 import os
 import time
 import asyncio
 import requests
+from openai import OpenAI
 import agentscope
 from agentscope.agent import ReActAgent
 from agentscope.message import Msg
@@ -81,11 +82,25 @@ def search_news(query: str, num_results: int = 10) -> list:
     return []
 
 
-# === Z.AI GLM Direct API Integration ===
+# === Z.AI GLM via OpenAI SDK ===
+
+def get_zai_client():
+    """
+    Get Z.AI client using OpenAI SDK with base_url.
+    """
+    if not ZAI_API_KEY:
+        raise ValueError("ZAI_API_KEY not configured")
+    
+    client = OpenAI(
+        api_key=ZAI_API_KEY,
+        base_url="https://api.z.ai/api/paas/v4/"  # Z.AI endpoint
+    )
+    return client
+
 
 def call_zai_glm(messages: list, system_prompt: str = "") -> str:
     """
-    Call Z.AI GLM API directly.
+    Call Z.AI GLM API using OpenAI SDK.
     
     Args:
         messages: List of message dicts with 'role' and 'content'
@@ -94,15 +109,7 @@ def call_zai_glm(messages: list, system_prompt: str = "") -> str:
     Returns:
         Response text from the model
     """
-    if not ZAI_API_KEY:
-        raise ValueError("ZAI_API_KEY not configured")
-    
-    url = "https://api.z.ai/api/paas/v4/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {ZAI_API_KEY}",
-        "Content-Type": "application/json",
-        "Accept-Language": "en-US,en"
-    }
+    client = get_zai_client()
     
     # Build messages with system prompt
     api_messages = []
@@ -110,42 +117,33 @@ def call_zai_glm(messages: list, system_prompt: str = "") -> str:
         api_messages.append({"role": "system", "content": system_prompt})
     api_messages.extend(messages)
     
-    payload = {
-        "model": "glm-4.7",
-        "messages": api_messages,
-        "temperature": 0.7,
-        "stream": False
-    }
-    
     for attempt in range(MAX_RETRIES):
         try:
-            print(f"[DEBUG] Calling Z.AI GLM API...")
-            response = requests.post(url, json=payload, headers=headers, timeout=120)
+            print(f"[DEBUG] Calling Z.AI GLM API via OpenAI SDK...")
             
-            if response.status_code in [429, 503]:
-                if attempt < MAX_RETRIES - 1:
-                    wait_time = RETRY_DELAY_SECONDS * (attempt + 1)
-                    print(f"[WARN] Z.AI rate limited (attempt {attempt + 1}/{MAX_RETRIES}), waiting {wait_time}s...")
-                    time.sleep(wait_time)
-                    continue
+            response = client.chat.completions.create(
+                model="glm-4.7",
+                messages=api_messages,
+                temperature=0.7,
+            )
             
-            if response.status_code != 200:
-                print(f"[ERROR] Z.AI API error: {response.status_code} - {response.text}")
-                raise Exception(f"Z.AI API error: {response.status_code}")
-            
-            data = response.json()
-            content = data["choices"][0]["message"]["content"]
+            content = response.choices[0].message.content
             print(f"[DEBUG] Z.AI response received successfully")
             return content
             
-        except requests.exceptions.RequestException as e:
-            if attempt < MAX_RETRIES - 1:
-                print(f"[WARN] Z.AI request failed (attempt {attempt + 1}/{MAX_RETRIES}): {e}")
-                time.sleep(RETRY_DELAY_SECONDS)
+        except Exception as e:
+            error_str = str(e).lower()
+            is_rate_limit = "429" in error_str or "rate" in error_str or "quota" in error_str
+            
+            if is_rate_limit and attempt < MAX_RETRIES - 1:
+                wait_time = RETRY_DELAY_SECONDS * (attempt + 1)
+                print(f"[WARN] Z.AI rate limited (attempt {attempt + 1}/{MAX_RETRIES}), waiting {wait_time}s...")
+                time.sleep(wait_time)
             else:
-                raise Exception(f"Z.AI API failed after {MAX_RETRIES} attempts: {e}")
+                print(f"[ERROR] Z.AI API error: {e}")
+                raise e
     
-    raise Exception("Z.AI API failed")
+    raise Exception("Z.AI API failed after all retries")
 
 
 # === Agent System Prompts ===
@@ -317,7 +315,7 @@ def run_analysis_pipeline(query: str = "gold silver price news") -> str:
     # Try Z.AI GLM first
     if ZAI_API_KEY:
         try:
-            print("[INFO] Using Z.AI GLM API (Priority 1)...")
+            print("[INFO] Using Z.AI GLM API (Priority 1) via OpenAI SDK...")
             return run_analysis_with_zai(query)
         except Exception as e:
             print(f"[WARN] Z.AI GLM failed: {e}")
