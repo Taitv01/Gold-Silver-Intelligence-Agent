@@ -8,6 +8,7 @@ import os
 import time
 import asyncio
 import requests
+from openai import OpenAI
 import agentscope
 from agentscope.agent import ReActAgent
 from agentscope.message import Msg
@@ -177,17 +178,27 @@ async def get_model_and_formatter_with_fallback():
     if PERPLEXITY_API_KEY:
         try:
             print("[INFO] Trying Perplexity API...")
-            model = OpenAIChatModel(
-                model_name="sonar",
+            # Use OpenAI client directly with Perplexity base_url
+            perplexity_client = OpenAI(
                 api_key=PERPLEXITY_API_KEY,
-                client_kwargs={"base_url": "https://api.perplexity.ai"},
+                base_url="https://api.perplexity.ai"
             )
-            formatter = OpenAIChatFormatter()
-            # Test call to verify API is working using Msg object
-            test_msg = Msg(name="user", content="hi", role="user")
-            await model(test_msg)
-            print("[INFO] Perplexity API test passed ✓")
-            return model, formatter, "Perplexity"
+            # Test call to verify API is working
+            test_response = perplexity_client.chat.completions.create(
+                model="sonar",
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=10
+            )
+            if test_response.choices:
+                print("[INFO] Perplexity API test passed ✓")
+                # Create AgentScope model for use in agents
+                model = OpenAIChatModel(
+                    model_name="sonar",
+                    api_key=PERPLEXITY_API_KEY,
+                    client_kwargs={"base_url": "https://api.perplexity.ai"},
+                )
+                formatter = OpenAIChatFormatter()
+                return model, formatter, "Perplexity"
         except Exception as e:
             errors.append(f"Perplexity: {e}")
             print(f"[WARN] Perplexity failed: {e}")
