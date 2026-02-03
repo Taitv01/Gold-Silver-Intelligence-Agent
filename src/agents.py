@@ -110,24 +110,120 @@ def search_news(query: str, num_results: int = 10) -> list:
     return []
 
 
+def search_twitter(query: str, num_results: int = 5) -> list:
+    """
+    Search for Twitter/X.com posts using Serper API (Google search with site filter).
+
+    Args:
+        query: Search query string
+        num_results: Number of results to return
+
+    Returns:
+        List of Twitter posts with title, link, snippet
+    """
+    if not SERPER_API_KEY:
+        print("[ERROR] SERPER_API_KEY not configured.")
+        return []
+
+    url = "https://google.serper.dev/search"
+    headers = {
+        "X-API-KEY": SERPER_API_KEY,
+        "Content-Type": "application/json"
+    }
+    # Search Twitter/X.com using site filter
+    twitter_query = f"{query} (site:x.com OR site:twitter.com)"
+    payload = {
+        "q": twitter_query,
+        "num": num_results,
+        "tbs": "qdr:d"  # Last 24 hours
+    }
+
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+
+        tweets = []
+        seen_links = set()
+        
+        for item in data.get("organic", []):
+            link = item.get("link", "")
+            
+            # Only include X.com or Twitter links
+            if "x.com" not in link and "twitter.com" not in link:
+                continue
+            
+            if link in seen_links:
+                continue
+            
+            seen_links.add(link)
+            tweets.append({
+                "title": item.get("title", ""),
+                "link": link,
+                "snippet": item.get("snippet", ""),
+                "source": "X/Twitter",
+                "date": item.get("date", "Gần đây")
+            })
+        
+        print(f"[INFO] Found {len(tweets)} tweets from X/Twitter")
+        return tweets
+
+    except requests.exceptions.RequestException as e:
+        print(f"[WARN] Twitter search failed: {e}")
+        return []
+
+
+def search_all_sources(query: str, num_news: int = 8, num_tweets: int = 5) -> list:
+    """
+    Search for news from all sources: News + Twitter/X.com
+    
+    Args:
+        query: Search query string
+        num_news: Number of news articles to fetch
+        num_tweets: Number of tweets to fetch
+        
+    Returns:
+        Combined list of news and tweets, deduplicated
+    """
+    print("[INFO] Fetching news from Serper API...")
+    news = search_news(query, num_news)
+    
+    print("[INFO] Fetching posts from X/Twitter...")
+    tweets = search_twitter(query, num_tweets)
+    
+    # Combine and deduplicate
+    all_items = news + tweets
+    
+    # Sort by source type (news first, then tweets)
+    # This ensures variety in results
+    print(f"[INFO] Total: {len(news)} news + {len(tweets)} tweets = {len(all_items)} items")
+    
+    return all_items
+
+
 # === Agent System Prompts ===
 
 NEWS_HUNTER_PROMPT = """Bạn là NewsHunter - chuyên gia thu thập và lọc tin tức thị trường Vàng/Bạc.
 
+NGUỒN TIN: Bạn sẽ nhận được tin tức từ nhiều nguồn:
+- Tin tức từ các trang báo chính thống
+- Bài đăng từ X/Twitter (có thể từ các chuyên gia, nhà phân tích)
+
 NHIỆM VỤ:
-1. Phân tích các tin tức được cung cấp
+1. Phân tích các tin tức và bài đăng được cung cấp
 2. Lọc ra các tin quan trọng liên quan đến:
    - Chính sách lãi suất Fed/FOMC
    - Chiến tranh, xung đột địa chính trị
    - Chỉ số DXY (USD Index)
    - Lạm phát, CPI, việc làm Mỹ
    - Chính sách tiền tệ các ngân hàng trung ương lớn
+   - Ý kiến từ các chuyên gia nổi tiếng trên X/Twitter
 
 OUTPUT FORMAT:
 📰 **TIN TỨC QUAN TRỌNG**
 
 1. [Tiêu đề tin 1]
-   - Nguồn: [source]
+   - Nguồn: [source] (đánh dấu 🐦 nếu từ X/Twitter)
    - Tóm tắt: [2-3 câu tóm tắt]
 
 2. [Tiêu đề tin 2]
@@ -301,9 +397,8 @@ async def run_analysis_async(query: str = "gold silver price news") -> str:
     """
     print(f"[INFO] Starting analysis pipeline with query: {query}")
 
-    # Step 1: Search for news
-    print("[INFO] Fetching news from Serper API...")
-    news_items = search_news(query)
+    # Step 1: Search for news from all sources (News + Twitter)
+    news_items = search_all_sources(query, num_news=8, num_tweets=5)
 
     if not news_items:
         return "❌ Không tìm thấy tin tức nào. Vui lòng thử lại sau."
@@ -313,10 +408,8 @@ async def run_analysis_async(query: str = "gold silver price news") -> str:
         f"📰 {item['title']}\n"
         f"   Nguồn: {item['source']} | {item['date']}\n"
         f"   {item['snippet']}"
-        for item in news_items[:8]
+        for item in news_items[:12]  # Tăng lên 12 để bao gồm cả tweets
     ])
-
-    print(f"[INFO] Found {len(news_items)} news articles.")
 
     # Step 2: Initialize AgentScope
     print("[INFO] Initializing AgentScope...")
