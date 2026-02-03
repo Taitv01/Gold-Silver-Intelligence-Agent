@@ -24,10 +24,10 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # === Log available API keys ===
 available_apis = []
-if GEMINI_API_KEY:
-    available_apis.append("Gemini [Priority 1]")
 if PERPLEXITY_API_KEY:
-    available_apis.append("Perplexity [Priority 2]")
+    available_apis.append("Perplexity [Priority 1]")
+if GEMINI_API_KEY:
+    available_apis.append("Gemini [Priority 2]")
 if GLM_API_KEY:
     available_apis.append("ZhipuAI (GLM) [Priority 3]")
 if OPENAI_API_KEY:

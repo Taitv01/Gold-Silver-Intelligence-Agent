@@ -164,16 +164,35 @@ OUTPUT FORMAT:
 """
 
 
-def get_model_and_formatter_with_fallback():
+async def get_model_and_formatter_with_fallback():
     """
     Try to get model with automatic fallback if primary fails.
-    Priority: Gemini -> Perplexity -> GLM (ZhipuAI) -> OpenAI
+    Priority: Perplexity -> Gemini -> GLM (ZhipuAI) -> OpenAI
     
-    Note: Change priority order based on which API keys you have available.
+    Note: Perplexity is prioritized because Gemini free tier often has quota issues.
     """
     errors = []
     
-    # Priority 1: Try Gemini first
+    # Priority 1: Try Perplexity first (more reliable for free tier)
+    if PERPLEXITY_API_KEY:
+        try:
+            print("[INFO] Trying Perplexity API...")
+            model = OpenAIChatModel(
+                model_name="sonar",
+                api_key=PERPLEXITY_API_KEY,
+                base_url="https://api.perplexity.ai",
+            )
+            formatter = OpenAIChatFormatter()
+            # Test call to verify API is working
+            test_msg = formatter.format([{"role": "user", "content": "hi"}])
+            await model(test_msg)
+            print("[INFO] Perplexity API test passed ✓")
+            return model, formatter, "Perplexity"
+        except Exception as e:
+            errors.append(f"Perplexity: {e}")
+            print(f"[WARN] Perplexity failed: {e}")
+    
+    # Priority 2: Fallback to Gemini
     if GEMINI_API_KEY:
         try:
             print("[INFO] Trying Gemini API...")
@@ -183,32 +202,13 @@ def get_model_and_formatter_with_fallback():
             )
             formatter = GeminiChatFormatter()
             # Test call to verify API is working (catches rate limits early)
-            test_msg = formatter.format([{"role": "user", "content": "test"}])
-            model(test_msg)  # This will fail if rate limited
+            test_msg = formatter.format([{"role": "user", "content": "hi"}])
+            await model(test_msg)
             print("[INFO] Gemini API test passed ✓")
             return model, formatter, "Gemini"
         except Exception as e:
             errors.append(f"Gemini: {e}")
             print(f"[WARN] Gemini failed: {e}")
-    
-    # Priority 2: Fallback to Perplexity (OpenAI-compatible)
-    if PERPLEXITY_API_KEY:
-        try:
-            print("[INFO] Trying Perplexity API...")
-            model = OpenAIChatModel(
-                model_name="llama-3.1-sonar-small-128k-online",
-                api_key=PERPLEXITY_API_KEY,
-                base_url="https://api.perplexity.ai",
-            )
-            formatter = OpenAIChatFormatter()
-            # Test call to verify API is working
-            test_msg = formatter.format([{"role": "user", "content": "test"}])
-            model(test_msg)
-            print("[INFO] Perplexity API test passed ✓")
-            return model, formatter, "Perplexity"
-        except Exception as e:
-            errors.append(f"Perplexity: {e}")
-            print(f"[WARN] Perplexity failed: {e}")
 
     # Priority 3: Fallback to GLM (ZhipuAI - uses OpenAI-compatible API)
     if GLM_API_KEY:
@@ -225,7 +225,7 @@ def get_model_and_formatter_with_fallback():
             errors.append(f"GLM: {e}")
             print(f"[WARN] GLM failed: {e}")
     
-    # Priority 3: Fallback to OpenAI
+    # Priority 4: Fallback to OpenAI
     if OPENAI_API_KEY:
         try:
             print("[INFO] Trying OpenAI API...")
@@ -308,7 +308,7 @@ async def run_analysis_async(query: str = "gold silver price news") -> str:
     agentscope.init(project="GoldSilverIntelligence", name="analysis")
 
     # Step 3: Get model and formatter with fallback support
-    model, formatter, provider = get_model_and_formatter_with_fallback()
+    model, formatter, provider = await get_model_and_formatter_with_fallback()
     print(f"[INFO] Using {provider} as LLM provider")
 
     # Step 4: Create NewsHunter Agent
