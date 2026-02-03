@@ -201,6 +201,10 @@ def get_model_and_formatter_with_fallback():
                 base_url="https://api.perplexity.ai",
             )
             formatter = OpenAIChatFormatter()
+            # Test call to verify API is working
+            test_msg = formatter.format([{"role": "user", "content": "test"}])
+            model(test_msg)
+            print("[INFO] Perplexity API test passed ✓")
             return model, formatter, "Perplexity"
         except Exception as e:
             errors.append(f"Perplexity: {e}")

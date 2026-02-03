@@ -13,6 +13,7 @@ from src.config import (
     GEMINI_API_KEY, 
     OPENAI_API_KEY, 
     GLM_API_KEY,
+    PERPLEXITY_API_KEY,
     SERPER_API_KEY, 
     TELEGRAM_BOT_TOKEN, 
     TELEGRAM_CHAT_ID
@@ -85,6 +86,7 @@ def check_llm_apis() -> dict:
     
     results = {
         "gemini": False,
+        "perplexity": False,
         "glm": False,
         "openai": False,
         "any_available": False
@@ -103,6 +105,13 @@ def check_llm_apis() -> dict:
         results["any_available"] = True
     else:
         print("   ⚠️  GEMINI_API_KEY not configured")
+    
+    if PERPLEXITY_API_KEY:
+        print("   ✅ PERPLEXITY_API_KEY configured")
+        results["perplexity"] = True
+        results["any_available"] = True
+    else:
+        print("   ⚠️  PERPLEXITY_API_KEY not configured")
     
     if OPENAI_API_KEY:
         print("   ✅ OPENAI_API_KEY configured")
