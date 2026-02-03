@@ -183,8 +183,8 @@ async def get_model_and_formatter_with_fallback():
                 client_kwargs={"base_url": "https://api.perplexity.ai"},
             )
             formatter = OpenAIChatFormatter()
-            # Test call to verify API is working
-            test_msg = await formatter.format([{"role": "user", "content": "hi"}])
+            # Test call to verify API is working using Msg object
+            test_msg = Msg(name="user", content="hi", role="user")
             await model(test_msg)
             print("[INFO] Perplexity API test passed ✓")
             return model, formatter, "Perplexity"
@@ -201,8 +201,8 @@ async def get_model_and_formatter_with_fallback():
                 api_key=GEMINI_API_KEY,
             )
             formatter = GeminiChatFormatter()
-            # Test call to verify API is working (catches rate limits early)
-            test_msg = await formatter.format([{"role": "user", "content": "hi"}])
+            # Test call to verify API is working using Msg object
+            test_msg = Msg(name="user", content="hi", role="user")
             await model(test_msg)
             print("[INFO] Gemini API test passed ✓")
             return model, formatter, "Gemini"
@@ -215,11 +215,15 @@ async def get_model_and_formatter_with_fallback():
         try:
             print("[INFO] Trying ZhipuAI GLM API (OpenAI-compatible)...")
             model = OpenAIChatModel(
-                model_name="glm-4-flash",
+                model_name="glm-4-air",  # Use glm-4-air instead of glm-4-flash
                 api_key=GLM_API_KEY,
                 client_kwargs={"base_url": "https://open.bigmodel.cn/api/paas/v4/"},
             )
             formatter = OpenAIChatFormatter()
+            # Test call to verify GLM API is working
+            test_msg = Msg(name="user", content="hi", role="user")
+            await model(test_msg)
+            print("[INFO] GLM API test passed ✓")
             return model, formatter, "GLM"
         except Exception as e:
             errors.append(f"GLM: {e}")
