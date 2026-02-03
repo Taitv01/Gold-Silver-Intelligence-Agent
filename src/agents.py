@@ -16,7 +16,7 @@ from agentscope.formatter import GeminiChatFormatter, OpenAIChatFormatter
 from agentscope.memory import InMemoryMemory
 from agentscope.tool import Toolkit
 
-from src.config import SERPER_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY, GLM_API_KEY
+from src.config import SERPER_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY, GLM_API_KEY, PERPLEXITY_API_KEY
 
 
 # === Rate Limit Configuration ===
@@ -167,7 +167,7 @@ OUTPUT FORMAT:
 def get_model_and_formatter_with_fallback():
     """
     Try to get model with automatic fallback if primary fails.
-    Priority: Gemini -> GLM (ZhipuAI) -> OpenAI
+    Priority: Gemini -> Perplexity -> GLM (ZhipuAI) -> OpenAI
     
     Note: Change priority order based on which API keys you have available.
     """
@@ -187,7 +187,22 @@ def get_model_and_formatter_with_fallback():
             errors.append(f"Gemini: {e}")
             print(f"[WARN] Gemini failed: {e}")
     
-    # Priority 2: Fallback to GLM (ZhipuAI - uses OpenAI-compatible API)
+    # Priority 2: Fallback to Perplexity (OpenAI-compatible)
+    if PERPLEXITY_API_KEY:
+        try:
+            print("[INFO] Trying Perplexity API...")
+            model = OpenAIChatModel(
+                model_name="llama-3.1-sonar-small-128k-online",
+                api_key=PERPLEXITY_API_KEY,
+                base_url="https://api.perplexity.ai",
+            )
+            formatter = OpenAIChatFormatter()
+            return model, formatter, "Perplexity"
+        except Exception as e:
+            errors.append(f"Perplexity: {e}")
+            print(f"[WARN] Perplexity failed: {e}")
+
+    # Priority 3: Fallback to GLM (ZhipuAI - uses OpenAI-compatible API)
     if GLM_API_KEY:
         try:
             print("[INFO] Trying ZhipuAI GLM API (OpenAI-compatible)...")
