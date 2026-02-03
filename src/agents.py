@@ -180,11 +180,11 @@ async def get_model_and_formatter_with_fallback():
             model = OpenAIChatModel(
                 model_name="sonar",
                 api_key=PERPLEXITY_API_KEY,
-                base_url="https://api.perplexity.ai",
+                client_kwargs={"base_url": "https://api.perplexity.ai"},
             )
             formatter = OpenAIChatFormatter()
             # Test call to verify API is working
-            test_msg = formatter.format([{"role": "user", "content": "hi"}])
+            test_msg = await formatter.format([{"role": "user", "content": "hi"}])
             await model(test_msg)
             print("[INFO] Perplexity API test passed ✓")
             return model, formatter, "Perplexity"
@@ -202,7 +202,7 @@ async def get_model_and_formatter_with_fallback():
             )
             formatter = GeminiChatFormatter()
             # Test call to verify API is working (catches rate limits early)
-            test_msg = formatter.format([{"role": "user", "content": "hi"}])
+            test_msg = await formatter.format([{"role": "user", "content": "hi"}])
             await model(test_msg)
             print("[INFO] Gemini API test passed ✓")
             return model, formatter, "Gemini"
@@ -217,7 +217,7 @@ async def get_model_and_formatter_with_fallback():
             model = OpenAIChatModel(
                 model_name="glm-4-flash",
                 api_key=GLM_API_KEY,
-                base_url="https://open.bigmodel.cn/api/paas/v4/",
+                client_kwargs={"base_url": "https://open.bigmodel.cn/api/paas/v4/"},
             )
             formatter = OpenAIChatFormatter()
             return model, formatter, "GLM"
