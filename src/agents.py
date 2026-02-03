@@ -182,6 +182,10 @@ def get_model_and_formatter_with_fallback():
                 api_key=GEMINI_API_KEY,
             )
             formatter = GeminiChatFormatter()
+            # Test call to verify API is working (catches rate limits early)
+            test_msg = formatter.format([{"role": "user", "content": "test"}])
+            model(test_msg)  # This will fail if rate limited
+            print("[INFO] Gemini API test passed ✓")
             return model, formatter, "Gemini"
         except Exception as e:
             errors.append(f"Gemini: {e}")
