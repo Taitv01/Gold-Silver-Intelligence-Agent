@@ -1,6 +1,7 @@
 # AgentScope 1.0+ requirements
 agentscope>=1.0.0
-requests
-python-dotenv
-google-genai
-openai
+requests>=2.31.0
+python-dotenv>=1.0.0
+google-genai>=0.4.0
+openai>=1.0.0
+protobuf>=3.19.5,<5.0.0

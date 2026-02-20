@@ -138,39 +138,56 @@ def search_twitter(query: str, num_results: int = 5) -> list:
         "tbs": "qdr:d"  # Last 24 hours
     }
 
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=15)
-        response.raise_for_status()
-        data = response.json()
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=15)
 
-        tweets = []
-        seen_links = set()
-        
-        for item in data.get("organic", []):
-            link = item.get("link", "")
-            
-            # Only include X.com or Twitter links
-            if "x.com" not in link and "twitter.com" not in link:
-                continue
-            
-            if link in seen_links:
-                continue
-            
-            seen_links.add(link)
-            tweets.append({
-                "title": item.get("title", ""),
-                "link": link,
-                "snippet": item.get("snippet", ""),
-                "source": "X/Twitter",
-                "date": item.get("date", "Gần đây")
-            })
-        
-        print(f"[INFO] Found {len(tweets)} tweets from X/Twitter")
-        return tweets
+            if response.status_code in RATE_LIMIT_CODES:
+                if attempt < MAX_RETRIES - 1:
+                    wait_time = RETRY_DELAY_SECONDS * (attempt + 1)
+                    print(f"[WARN] Twitter search rate limited (attempt {attempt + 1}/{MAX_RETRIES}), waiting {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"[ERROR] Twitter search rate limit exceeded after {MAX_RETRIES} attempts")
+                    return []
 
-    except requests.exceptions.RequestException as e:
-        print(f"[WARN] Twitter search failed: {e}")
-        return []
+            response.raise_for_status()
+            data = response.json()
+
+            tweets = []
+            seen_links = set()
+            
+            for item in data.get("organic", []):
+                link = item.get("link", "")
+                
+                if "x.com" not in link and "twitter.com" not in link:
+                    continue
+                
+                if link in seen_links:
+                    continue
+                
+                seen_links.add(link)
+                tweets.append({
+                    "title": item.get("title", ""),
+                    "link": link,
+                    "snippet": item.get("snippet", ""),
+                    "source": "X/Twitter",
+                    "date": item.get("date", "Gần đây")
+                })
+            
+            print(f"[INFO] Found {len(tweets)} tweets from X/Twitter")
+            return tweets
+
+        except requests.exceptions.RequestException as e:
+            if attempt < MAX_RETRIES - 1:
+                print(f"[WARN] Twitter search failed (attempt {attempt + 1}/{MAX_RETRIES}): {e}")
+                time.sleep(RETRY_DELAY_SECONDS)
+            else:
+                print(f"[ERROR] Twitter search failed after {MAX_RETRIES} attempts: {e}")
+                return []
+
+    return []
 
 
 def search_all_sources(query: str, num_news: int = 8, num_tweets: int = 5) -> list:
