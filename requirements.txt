@@ -1,5 +1,6 @@
 # Gold-Silver-Intelligence requirements
-# Uses Google Gemini API directly via google-genai SDK
+# Gemini (primary) + Perplexity (fallback) LLM support
 google-genai==1.64.0
+openai==2.21.0
 requests==2.32.5
 python-dotenv==1.1.1

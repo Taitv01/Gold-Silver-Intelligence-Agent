@@ -1,14 +1,15 @@
 """
 Gold-Silver-Intelligence Agents Module
-Uses Google Gemini API directly via google-genai SDK.
+Multi-provider LLM support: Gemini (primary) + Perplexity (fallback).
 Includes: Serper news search, rate limit handling, retry logic.
 """
 import time
 import requests
 from google import genai
 from google.genai import types
+from openai import OpenAI
 
-from src.config import SERPER_API_KEY, GEMINI_API_KEY
+from src.config import SERPER_API_KEY, GEMINI_API_KEY, PERPLEXITY_API_KEY
 
 
 # === Rate Limit Configuration ===
@@ -260,20 +261,10 @@ OUTPUT FORMAT:
 """
 
 
-def call_gemini(prompt: str, system_instruction: str = "") -> str:
+def _call_gemini(prompt: str, system_instruction: str = "") -> str:
     """
     Call Google Gemini API with retry logic.
-
-    Args:
-        prompt: User prompt to send
-        system_instruction: System instruction for the model
-
-    Returns:
-        Response text from Gemini
     """
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY not configured. Check .env file.")
-
     client = genai.Client(api_key=GEMINI_API_KEY)
 
     config = types.GenerateContentConfig(
@@ -304,9 +295,86 @@ def call_gemini(prompt: str, system_instruction: str = "") -> str:
                 raise
 
 
+def _call_perplexity(prompt: str, system_instruction: str = "") -> str:
+    """
+    Call Perplexity API (OpenAI-compatible) with retry logic.
+    """
+    client = OpenAI(
+        api_key=PERPLEXITY_API_KEY,
+        base_url="https://api.perplexity.ai"
+    )
+
+    messages = []
+    if system_instruction:
+        messages.append({"role": "system", "content": system_instruction})
+    messages.append({"role": "user", "content": prompt})
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = client.chat.completions.create(
+                model="sonar",
+                messages=messages,
+                max_tokens=2048,
+                temperature=0.7,
+            )
+            return response.choices[0].message.content
+
+        except Exception as e:
+            error_str = str(e).lower()
+            is_rate_limit = "429" in error_str or "rate" in error_str or "quota" in error_str
+
+            if is_rate_limit and attempt < MAX_RETRIES - 1:
+                wait_time = RETRY_DELAY_SECONDS * (attempt + 1) * 2
+                print(f"[WARN] Perplexity rate limited (attempt {attempt + 1}/{MAX_RETRIES}), waiting {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                raise
+
+
+def call_llm(prompt: str, system_instruction: str = "") -> tuple:
+    """
+    Call LLM with automatic fallback: Gemini -> Perplexity.
+
+    Args:
+        prompt: User prompt to send
+        system_instruction: System instruction for the model
+
+    Returns:
+        Tuple of (response_text, provider_name)
+    """
+    errors = []
+
+    # Priority 1: Gemini
+    if GEMINI_API_KEY:
+        try:
+            print("[INFO] Calling Gemini API...")
+            result = _call_gemini(prompt, system_instruction)
+            return result, "Gemini"
+        except Exception as e:
+            errors.append(f"Gemini: {e}")
+            print(f"[WARN] Gemini failed: {e}")
+
+    # Priority 2: Perplexity (fallback)
+    if PERPLEXITY_API_KEY:
+        try:
+            print("[INFO] Falling back to Perplexity API...")
+            result = _call_perplexity(prompt, system_instruction)
+            return result, "Perplexity"
+        except Exception as e:
+            errors.append(f"Perplexity: {e}")
+            print(f"[WARN] Perplexity failed: {e}")
+
+    raise ValueError(
+        f"All LLM providers failed. "
+        f"Configure GEMINI_API_KEY or PERPLEXITY_API_KEY in .env\n"
+        f"Errors: {errors}"
+    )
+
+
 def run_analysis_pipeline(query: str = "gold silver price news") -> str:
     """
-    Run the full analysis pipeline using Google Gemini.
+    Run the full analysis pipeline with multi-provider LLM support.
+    Priority: Gemini -> Perplexity (auto-fallback).
 
     Args:
         query: Search query for news
@@ -333,21 +401,27 @@ def run_analysis_pipeline(query: str = "gold silver price news") -> str:
     print(f"[INFO] Found {len(news_items)} items total.")
 
     # Step 2: NewsHunter filters important news
-    print("[INFO] NewsHunter analyzing news via Gemini...")
-    hunter_content = call_gemini(
+    print("[INFO] NewsHunter analyzing news...")
+    hunter_content, provider1 = call_llm(
         prompt=f"Phân tích và lọc các tin tức sau:\n\n{news_text}",
         system_instruction=NEWS_HUNTER_PROMPT,
     )
 
     # Step 3: MarketAnalyst provides insights
-    print("[INFO] MarketAnalyst generating report via Gemini...")
-    analyst_content = call_gemini(
+    print("[INFO] MarketAnalyst generating report...")
+    analyst_content, provider2 = call_llm(
         prompt=f"Dựa trên các tin tức đã lọc sau đây, hãy phân tích xu hướng giá Vàng/Bạc:\n\n{hunter_content}",
         system_instruction=MARKET_ANALYST_PROMPT,
     )
 
-    # Combine reports
-    final_report = f"🤖 *Powered by Google Gemini*\n\n{hunter_content}\n\n---\n\n{analyst_content}"
+    # Determine provider display
+    if provider1 == provider2:
+        provider_label = provider1
+    else:
+        provider_label = f"{provider1} + {provider2}"
 
-    print("[INFO] Analysis pipeline completed.")
+    # Combine reports
+    final_report = f"🤖 *Powered by {provider_label}*\n\n{hunter_content}\n\n---\n\n{analyst_content}"
+
+    print(f"[INFO] Analysis pipeline completed. (Provider: {provider_label})")
     return final_report
