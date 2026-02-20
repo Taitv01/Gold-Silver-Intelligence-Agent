@@ -1,6 +1,7 @@
 """
 Gold-Silver-Intelligence Telegram Bot Module
 Sends alerts and reports via Telegram Bot API.
+Handles message splitting for >4096 char messages.
 """
 import time
 import requests
