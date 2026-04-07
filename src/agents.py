@@ -444,7 +444,7 @@ def run_analysis_pipeline(query: str = "gold silver price news") -> str:
     # If analyst failed, still send hunter's output
     if analyst_content is None:
         print("[WARN] MarketAnalyst unavailable. Sending hunter report only.")
-        return f"🤖 *Powered by {provider1} (partial)*\n\n{hunter_content}\n\n⚠️ _Phân tích thị trường không khả dụng do hết quota API._"
+        return f"🤖 *Phân tích bởi {provider1} (chưa đầy đủ)*\n\n{hunter_content}\n\n⚠️ _Phân tích thị trường không khả dụng do hết quota API._"
 
     # Determine provider display
     if provider1 == provider2:
@@ -453,7 +453,7 @@ def run_analysis_pipeline(query: str = "gold silver price news") -> str:
         provider_label = f"{provider1} + {provider2}"
 
     # Combine reports
-    final_report = f"🤖 *Powered by {provider_label}*\n\n{hunter_content}\n\n---\n\n{analyst_content}"
+    final_report = f"🤖 *Phân tích bởi {provider_label}*\n\n{hunter_content}\n\n---\n\n{analyst_content}"
 
     print(f"[INFO] Analysis pipeline completed. (Provider: {provider_label})")
     return final_report

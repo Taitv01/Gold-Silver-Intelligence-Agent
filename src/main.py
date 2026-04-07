@@ -32,7 +32,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 50)
-    print("🥇 Gold-Silver Intelligence Agent")
+    print("🥇 Trợ lý Thông minh Vàng-Bạc")
     print("=" * 50)
 
     try:
@@ -40,7 +40,7 @@ def main():
         report = run_analysis_pipeline(args.query)
 
         print("\n" + "=" * 50)
-        print("📊 ANALYSIS REPORT")
+        print("📊 BÁO CÁO PHÂN TÍCH")
         print("=" * 50)
         print(report)
 
@@ -48,15 +48,15 @@ def main():
         if not args.no_telegram:
             print("\n[INFO] Sending report to Telegram...")
             success = send_report(
-                title="Gold-Silver Intelligence Report",
+                title="Báo cáo Phân tích Vàng-Bạc",
                 content=report
             )
             if success:
-                print("[OK] Report sent to Telegram successfully!")
+                print("[✅] Đã gửi báo cáo lên Telegram thành công!")
             else:
-                print("[WARN] Failed to send report to Telegram.")
+                print("[⚠️] Gửi báo cáo lên Telegram thất bại.")
 
-        print("\n✅ Analysis completed.")
+        print("\n✅ Phân tích hoàn tất.")
 
     except Exception as e:
         print(f"\n❌ Error: {e}")
