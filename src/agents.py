@@ -4,6 +4,7 @@ Multi-provider LLM support: Gemini (primary) + Perplexity (fallback).
 Includes: Serper news search, rate limit handling, retry logic.
 """
 import time
+import random
 import requests
 from google import genai
 from google.genai import types
@@ -13,8 +14,8 @@ from src.config import SERPER_API_KEY, GEMINI_API_KEY, PERPLEXITY_API_KEY
 
 
 # === Rate Limit Configuration ===
-MAX_RETRIES = 3
-RETRY_DELAY_SECONDS = 5
+MAX_RETRIES = 5
+RETRY_DELAY_SECONDS = 15
 RATE_LIMIT_CODES = [429, 503]
 
 
@@ -263,7 +264,8 @@ OUTPUT FORMAT:
 
 def _call_gemini(prompt: str, system_instruction: str = "") -> str:
     """
-    Call Google Gemini API with retry logic.
+    Call Google Gemini API with exponential backoff + jitter.
+    Uses gemini-2.0-flash-lite to reduce quota consumption.
     """
     client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -277,7 +279,7 @@ def _call_gemini(prompt: str, system_instruction: str = "") -> str:
     for attempt in range(MAX_RETRIES):
         try:
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.0-flash-lite",
                 contents=prompt,
                 config=config,
             )
@@ -285,11 +287,14 @@ def _call_gemini(prompt: str, system_instruction: str = "") -> str:
 
         except Exception as e:
             error_str = str(e).lower()
-            is_rate_limit = "429" in error_str or "rate" in error_str or "quota" in error_str
+            is_rate_limit = "429" in error_str or "rate" in error_str or "quota" in error_str or "resource_exhausted" in error_str
 
             if is_rate_limit and attempt < MAX_RETRIES - 1:
-                wait_time = RETRY_DELAY_SECONDS * (attempt + 1) * 2
-                print(f"[WARN] Gemini rate limited (attempt {attempt + 1}/{MAX_RETRIES}), waiting {wait_time}s...")
+                # Exponential backoff with random jitter to avoid thundering herd
+                base_wait = RETRY_DELAY_SECONDS * (2 ** attempt)
+                jitter = random.uniform(0, base_wait * 0.3)
+                wait_time = base_wait + jitter
+                print(f"[WARN] Gemini rate limited (attempt {attempt + 1}/{MAX_RETRIES}), waiting {wait_time:.0f}s...")
                 time.sleep(wait_time)
             else:
                 raise
@@ -321,11 +326,13 @@ def _call_perplexity(prompt: str, system_instruction: str = "") -> str:
 
         except Exception as e:
             error_str = str(e).lower()
-            is_rate_limit = "429" in error_str or "rate" in error_str or "quota" in error_str
+            is_rate_limit = "429" in error_str or "rate" in error_str or "quota" in error_str or "resource_exhausted" in error_str
 
             if is_rate_limit and attempt < MAX_RETRIES - 1:
-                wait_time = RETRY_DELAY_SECONDS * (attempt + 1) * 2
-                print(f"[WARN] Perplexity rate limited (attempt {attempt + 1}/{MAX_RETRIES}), waiting {wait_time}s...")
+                base_wait = RETRY_DELAY_SECONDS * (2 ** attempt)
+                jitter = random.uniform(0, base_wait * 0.3)
+                wait_time = base_wait + jitter
+                print(f"[WARN] Perplexity rate limited (attempt {attempt + 1}/{MAX_RETRIES}), waiting {wait_time:.0f}s...")
                 time.sleep(wait_time)
             else:
                 raise
@@ -364,17 +371,32 @@ def call_llm(prompt: str, system_instruction: str = "") -> tuple:
             errors.append(f"Perplexity: {e}")
             print(f"[WARN] Perplexity failed: {e}")
 
-    raise ValueError(
-        f"All LLM providers failed. "
-        f"Configure GEMINI_API_KEY or PERPLEXITY_API_KEY in .env\n"
-        f"Errors: {errors}"
-    )
+    # Instead of crashing, return None so pipeline can gracefully fallback
+    print(f"[ERROR] All LLM providers failed. Errors: {errors}")
+    return None, "None"
+
+
+def _format_raw_news_report(news_items: list) -> str:
+    """
+    Fallback: format raw news when LLM providers are unavailable.
+    """
+    lines = ["📰 *TIN TỨC VÀNG/BẠC (Bản tóm tắt tự động)*\n"]
+    for i, item in enumerate(news_items[:8], 1):
+        source_icon = "🐦" if item.get('source') == 'X/Twitter' else "📰"
+        lines.append(
+            f"{i}. {source_icon} *{item['title']}*\n"
+            f"   Nguồn: {item['source']} | {item['date']}\n"
+            f"   {item['snippet']}\n"
+        )
+    lines.append("\n⚠️ _LLM API không khả dụng. Đây là bản tin thô chưa qua phân tích._")
+    return "\n".join(lines)
 
 
 def run_analysis_pipeline(query: str = "gold silver price news") -> str:
     """
     Run the full analysis pipeline with multi-provider LLM support.
     Priority: Gemini -> Perplexity (auto-fallback).
+    If all LLMs fail, returns raw news summary instead of crashing.
 
     Args:
         query: Search query for news
@@ -407,12 +429,22 @@ def run_analysis_pipeline(query: str = "gold silver price news") -> str:
         system_instruction=NEWS_HUNTER_PROMPT,
     )
 
+    # Graceful fallback: if LLM failed, send raw news
+    if hunter_content is None:
+        print("[WARN] All LLM providers unavailable. Sending raw news report.")
+        return _format_raw_news_report(news_items)
+
     # Step 3: MarketAnalyst provides insights
     print("[INFO] MarketAnalyst generating report...")
     analyst_content, provider2 = call_llm(
         prompt=f"Dựa trên các tin tức đã lọc sau đây, hãy phân tích xu hướng giá Vàng/Bạc:\n\n{hunter_content}",
         system_instruction=MARKET_ANALYST_PROMPT,
     )
+
+    # If analyst failed, still send hunter's output
+    if analyst_content is None:
+        print("[WARN] MarketAnalyst unavailable. Sending hunter report only.")
+        return f"🤖 *Powered by {provider1} (partial)*\n\n{hunter_content}\n\n⚠️ _Phân tích thị trường không khả dụng do hết quota API._"
 
     # Determine provider display
     if provider1 == provider2:

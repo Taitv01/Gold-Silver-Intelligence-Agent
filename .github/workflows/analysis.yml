@@ -4,15 +4,18 @@ on:
   schedule:
     # 8:00 AM VN (01:00 UTC) - Trước giờ mở cửa thị trường Châu Á
     - cron: "0 1 * * 1-5"
-    # 15:00 VN (08:00 UTC) - Trước giờ mở cửa thị trường Châu Âu
-    - cron: "0 8 * * 1-5"
     # 20:00 VN (13:00 UTC) - Trước giờ mở cửa thị trường Mỹ
     - cron: "0 13 * * 1-5"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
   analyze:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -21,6 +24,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
       - name: Install dependencies
         run: |
