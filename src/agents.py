@@ -4,6 +4,8 @@ Multi-provider LLM support: Gemini (primary) + Perplexity (fallback).
 Includes: Serper news search, rate limit handling, retry logic.
 """
 import time
+from datetime import datetime
+import pytz
 import random
 import requests
 from google import genai
@@ -180,7 +182,7 @@ def search_twitter(query: str, num_results: int = 5) -> list:
 
 def search_all_sources(query: str, num_news: int = 8, num_tweets: int = 5) -> list:
     """
-    Search for news from all sources: News + Twitter/X.com
+    Search for news from all sources: News (EN + VI) + Twitter/X.com
 
     Args:
         query: Search query string
@@ -190,14 +192,20 @@ def search_all_sources(query: str, num_news: int = 8, num_tweets: int = 5) -> li
     Returns:
         Combined list of news and tweets, deduplicated
     """
-    print("[INFO] Fetching news from Serper API...")
-    news = search_news(query, num_news)
+    # Tìm tin quốc tế (English)
+    print("[INFO] Fetching international news...")
+    news_en = search_news(query, num_news)
+
+    # Tìm tin tiếng Việt
+    vn_query = "giá vàng bạc hôm nay lãi suất Fed DXY"
+    print("[INFO] Fetching Vietnamese news...")
+    news_vn = search_news(vn_query, max(3, num_news // 2))
 
     print("[INFO] Fetching posts from X/Twitter...")
     tweets = search_twitter(query, num_tweets)
 
-    all_items = news + tweets
-    print(f"[INFO] Total: {len(news)} news + {len(tweets)} tweets = {len(all_items)} items")
+    all_items = news_en + news_vn + tweets
+    print(f"[INFO] Total: {len(news_en)} EN + {len(news_vn)} VN + {len(tweets)} tweets = {len(all_items)} items")
 
     return all_items
 
@@ -379,16 +387,57 @@ def call_llm(prompt: str, system_instruction: str = "") -> tuple:
 def _format_raw_news_report(news_items: list) -> str:
     """
     Fallback: format raw news when LLM providers are unavailable.
+    Professional Vietnamese format with structured sections.
     """
-    lines = ["📰 *TIN TỨC VÀNG/BẠC (Bản tóm tắt tự động)*\n"]
+    # Lấy giờ Việt Nam
+    tz_vn = pytz.timezone('Asia/Ho_Chi_Minh')
+    scan_time = datetime.now(tz_vn).strftime("%H:%M %d/%m/%Y")
+
+    lines = [
+        "📰 *BẢN TIN THỊ TRƯỜNG VÀNG/BẠC*",
+        f"🕐 _{scan_time}_",
+        "",
+        "━" * 26,
+        "🔍 *TIN TỨC ĐÁNG CHÚ Ý*",
+        "━" * 26,
+        "",
+    ]
+
     for i, item in enumerate(news_items[:8], 1):
-        source_icon = "🐦" if item.get('source') == 'X/Twitter' else "📰"
-        lines.append(
-            f"{i}. {source_icon} *{item['title']}*\n"
-            f"   Nguồn: {item['source']} | {item['date']}\n"
-            f"   {item['snippet']}\n"
-        )
-    lines.append("\n⚠️ _LLM API không khả dụng. Đây là bản tin thô chưa qua phân tích._")
+        source = item.get('source', 'Unknown')
+        date = item.get('date', '')
+
+        # Phân loại nguồn tin
+        if source == 'X/Twitter':
+            source_icon = "🐦"
+            source_label = "X/Twitter"
+        elif any(vn in source.lower() for vn in ['vn', 'việt', 'saigon', 'hanoi', 'tuoitre', 'vnexpress', 'cafef', 'vietstock']):
+            source_icon = "🇻🇳"
+            source_label = source
+        else:
+            source_icon = "🌐"
+            source_label = source
+
+        lines.append(f"{i}. {source_icon} *{item['title']}*")
+        lines.append(f"   📎 {source_label} | {date}")
+
+        snippet = item.get('snippet', '')
+        if snippet:
+            # Rút gọn snippet nếu quá dài
+            if len(snippet) > 200:
+                snippet = snippet[:197] + "..."
+            lines.append(f"   _{snippet}_")
+        lines.append("")
+
+    # Footer
+    lines.extend([
+        "━" * 26,
+        "⚠️ _Lưu ý: Hệ thống phân tích AI tạm thời không khả dụng._",
+        "_Đây là bản tổng hợp tin tức tự động, chưa qua phân tích xu hướng._",
+        "_Vui lòng đợi bản tin tiếp theo để xem phân tích đầy đủ._",
+        "",
+        "🤖 _Powered by Gold-Silver Intelligence Agent_",
+    ])
     return "\n".join(lines)
 
 
